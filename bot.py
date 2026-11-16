@@ -2480,6 +2480,107 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_to_message_id=msg_id
     )
 
+
+
+@restricted_command
+async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Import one forwarded card-log media message while preserving its original card ID."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or msg.chat.type != "private":
+        return
+    if user.id != ADMIN_ID:
+        return
+
+    # Accept only forwarded media messages; ordinary photos/videos are ignored.
+    is_forwarded = bool(
+        getattr(msg, "forward_date", None)
+        or getattr(msg, "forward_from", None)
+        or getattr(msg, "forward_from_chat", None)
+        or getattr(msg, "forward_sender_name", None)
+        or getattr(msg, "forward_origin", None)
+    )
+    if not is_forwarded:
+        return
+
+    caption = (msg.caption or "").strip()
+    if not caption or "Card Name" not in caption or "Rarity" not in caption:
+        return await msg.reply_text("❌ ဒီ Forward က Card Log ပုံစံမဟုတ်ပါ။ Card Log တစ်ခုလုံးကို ပုံ/ဗီဒီယိုနဲ့အတူ Forward လုပ်ပေးပါ။")
+
+    def field(pattern):
+        match = re.search(pattern, caption, flags=re.IGNORECASE | re.MULTILINE)
+        return match.group(1).strip() if match else None
+
+    card_id = field(r"^\s*(?:❝\s*)?ID\s*:\s*([0-9]+)\s*$")
+    card_name = field(r"^\s*❀?\s*Card Name\s*:\s*(.+?)\s*$")
+    collection = field(r"^\s*📚?\s*Collection\s*:\s*(.+?)\s*$")
+    rarity_line = field(r"^\s*🌟?\s*Rarity\s*:\s*(.+?)\s*$")
+
+    if not all((card_id, card_name, rarity_line)):
+        return await msg.reply_text("❌ Card Log ထဲက ID / Name / Rarity ကို မဖတ်နိုင်ပါ။ မူရင်း Log ကို Screenshot ပို့ပေးပါ။")
+
+    # If the old log has no Collection field, assign one from the bot's existing collection pool.
+    if not collection:
+        collections_list = [
+            "🎞 Ope Ope No Mi [ 🩺]",
+            "🎞 Hito Hito No Mi [🌕]",
+            "🎞 Mera Mera No Mi [🔥]",
+            "🎞 Hana Hana No Mi [🌸]",
+            "🎞 Yomi Yomi No Mi [💀]",
+            "🎞 Tori Tori No Mi [🦅]",
+            "🎞 Yami Yami No Mi [🌑]"
+        ]
+        collection = random.choice(collections_list)
+
+    rarity = None
+    for candidate in ("Birthday Special", "Beyond", "Raiden", "Kryora", "Yugen", "Shinsei", "Kiwami", "Kami", "Hoshi", "Ten"):
+        if candidate.lower() in rarity_line.lower():
+            rarity = candidate
+            break
+    if rarity is None:
+        if "🎀" in rarity_line:
+            rarity = "Birthday Special"
+        else:
+            return await msg.reply_text(f"❌ မသိတဲ့ Rarity ဖြစ်ပါတယ်: {rarity_line}")
+
+    if msg.photo:
+        file_id, c_type = msg.photo[-1].file_id, "photo"
+    elif msg.video:
+        file_id, c_type = msg.video.file_id, "video"
+    else:
+        return await msg.reply_text("❌ Forward လုပ်ထားတဲ့ Log မှာ Photo/Video မပါပါ။")
+
+    is_locked = rarity == "Beyond"
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchrow(
+                    "SELECT card_id, name FROM cards WHERE card_id = $1", card_id
+                )
+                if existing:
+                    return await msg.reply_text(
+                        f"⚠️ Duplicate Card ID: <code>{card_id}</code>\n"
+                        f"ရှိပြီးသား Card: {existing['name']}",
+                        parse_mode="HTML"
+                    )
+                await conn.execute("""
+                    INSERT INTO cards (card_id, name, type, file_id, rarity, collection, is_locked)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, card_id, card_name, c_type, file_id, rarity, collection, is_locked)
+    except Exception as exc:
+        print(f"Forwarded card import failed for ID {card_id}: {type(exc).__name__}: {exc}")
+        return await msg.reply_text("❌ Database ထဲထည့်မရပါ။ Railway Deploy Logs ကို စစ်ပါ။")
+
+    await msg.reply_text(
+        "✅ Card imported successfully!\n\n"
+        f"🎴 Name: {card_name}\n"
+        f"🆔 Original ID: <code>{card_id}</code>\n"
+        f"🌟 Rarity: {get_rarity_display(rarity)}\n"
+        f"📚 Collection: {collection}\n"
+        f"🔒 Locked: {'Yes' if is_locked else 'No'}",
+        parse_mode="HTML"
+    )
+
 @restricted_command
 async def ttcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -5227,6 +5328,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(InlineQueryHandler(inline_query_handler))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO), import_forwarded_card_log), group=1)
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
 
     print("🤖 Python Game Bot Running...")
