@@ -61,9 +61,16 @@ seen_registered_groups = set()
 # Process updates from different users concurrently, while keeping each user's
 # updates ordered. This protects user-scoped in-memory state from same-user races.
 class UserSerialUpdateProcessor(BaseUpdateProcessor):
-    def __init__(self, max_concurrent_updates: int = 16):
+    """
+    Keep commands from the same user ordered, but do not make a command wait
+    behind ordinary chat messages from that user. This reduces command delays
+    when a user is active in busy groups while retaining command-to-command
+    ordering for the bot's stateful commands.
+    """
+    def __init__(self, max_concurrent_updates: int = 24):
         super().__init__(max_concurrent_updates=max_concurrent_updates)
         self._user_locks = {}
+        self._locks_guard = asyncio.Lock()
 
     async def initialize(self):
         return
@@ -76,18 +83,41 @@ class UserSerialUpdateProcessor(BaseUpdateProcessor):
         chat = update.effective_chat
 
         if user is not None:
-            lock_key = ("user", user.id)
+            owner_key = ("user", user.id)
         elif chat is not None:
-            lock_key = ("chat", chat.id)
+            owner_key = ("chat", chat.id)
         else:
-            lock_key = ("update", update.update_id)
+            owner_key = ("update", update.update_id)
 
-        lock = self._user_locks.get(lock_key)
-        if lock is None:
-            lock = self._user_locks.setdefault(lock_key, asyncio.Lock())
+        message = update.effective_message
+        message_text = ""
+        if message is not None:
+            message_text = message.text or message.caption or ""
 
-        async with lock:
-            await coroutine
+        # Commands get their own ordered lane so group chatter cannot hold
+        # up a user's /commands. Other updates remain ordered with each other.
+        is_command = update.callback_query is None and message_text.lstrip().startswith("/")
+        lane = "command" if is_command else "other"
+        lock_key = (owner_key, lane)
+
+        async with self._locks_guard:
+            entry = self._user_locks.get(lock_key)
+            if entry is None:
+                entry = {"lock": asyncio.Lock(), "users": 0}
+                self._user_locks[lock_key] = entry
+            entry["users"] += 1
+            lock = entry["lock"]
+
+        try:
+            async with lock:
+                await coroutine
+        finally:
+            async with self._locks_guard:
+                current = self._user_locks.get(lock_key)
+                if current is entry:
+                    current["users"] -= 1
+                    if current["users"] <= 0 and not current["lock"].locked():
+                        self._user_locks.pop(lock_key, None)
 
 
 # Database Connection Pool: start small and allow measured concurrency.
@@ -5114,11 +5144,21 @@ async def post_init(app: Application):
     await init_db()
 
 
+async def application_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Log unexpected handler errors without stopping the polling process."""
+    error = context.error
+    update_id = getattr(update, "update_id", "unknown")
+    print(
+        f"⚠️ Unhandled update error (update_id={update_id}): "
+        f"{type(error).__name__}: {error}"
+    )
+
+
 def main():
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN is missing. Set it in Railway Variables.")
 
-    update_processor = UserSerialUpdateProcessor(max_concurrent_updates=16)
+    update_processor = UserSerialUpdateProcessor(max_concurrent_updates=24)
     app = (
         Application.builder()
         .token(TOKEN)
@@ -5126,6 +5166,7 @@ def main():
         .concurrent_updates(update_processor)
         .build()
     )
+    app.add_error_handler(application_error_handler)
 
     # Public User Commands
     app.add_handler(CommandHandler("start", start_cmd))
