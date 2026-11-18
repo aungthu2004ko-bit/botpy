@@ -8,7 +8,7 @@ import time
 import datetime
 import uuid
 import asyncpg
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
 from telegram.error import TelegramError, NetworkError, TimedOut
 from telegram.ext import (
     Application,
@@ -26,7 +26,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7940553702"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID", "@beyondpoe")
-CARD_LOG_CHANNEL_ID = "@kccardlogsch"
+CARD_LOG_CHANNEL_ID = "@beyondpoe"
 TIGER_DRAGON_CHANNEL_ID = "@beyondpoe"
 
 # Main Group Link for /kbox, /klot, /kdaily, and /pre restriction
@@ -599,44 +599,32 @@ async def get_weighted_random_card(conn):
 
 async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.effective_user
-    if not user or user.is_bot:
+    if not user or user.is_bot or user.id == ADMIN_ID:
         return True
-    if user.id == ADMIN_ID:
+    destinations = (
+        ("@beyondpoe", "https://t.me/beyondpoe", "Join Channel 📢"),
+        ("@Kachi_sGroup", "https://t.me/Kachi_sGroup", "Join Main Group 🏰"),
+    )
+    missing = []
+    for chat_id, link, label in destinations:
+        try:
+            member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
+            if member.status in ("left", "kicked"):
+                missing.append((link, label))
+        except Exception as e:
+            print(f"Force-join check unavailable for {chat_id}, user {user.id}: {type(e).__name__}: {e}")
+            return True
+    if not missing:
         return True
-
-    # A temporary Telegram/Railway network or API error must not silently
-    # disable every command. Enforce joining only when Telegram returns
-    # the user's actual membership status.
-    try:
-        member = await context.bot.get_chat_member(chat_id="@beyondpoe", user_id=user.id)
-    except TelegramError as e:
-        print(f"Force-join check temporarily unavailable for user {user.id}: {type(e).__name__}: {e}")
-        return True
-    except Exception as e:
-        print(f"Unexpected force-join check error for user {user.id}: {type(e).__name__}: {e}")
-        return True
-
-    if member.status not in ['left', 'kicked']:
-        return True
-
-    text = f"🐠 Hello {get_mention(user.id, user.first_name)}, please join our channel to use the bot 🩸"
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Join Channel 📢", url="https://t.me/beyondpoe")],
-        [InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}")]
-    ])
+    rows = [[InlineKeyboardButton(label, url=link)] for link, label in missing]
+    rows.append([InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}")])
+    keyboard = InlineKeyboardMarkup(rows)
+    text = f"🐠 Hello {get_mention(user.id, user.first_name)}! Please join both required chats to use the bot 🩸"
     if update.message:
-        try:
-            await update.message.reply_text(
-                text, parse_mode="HTML", reply_markup=keyboard,
-                reply_to_message_id=update.message.message_id
-            )
-        except Exception as e:
-            print(f"Could not send force-join notice to user {user.id}: {type(e).__name__}: {e}")
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard,
+                                        reply_to_message_id=update.message.message_id)
     elif update.callback_query:
-        try:
-            await update.callback_query.answer("❌ Please join the channel first.", show_alert=True)
-        except Exception as e:
-            print(f"Could not answer force-join callback for user {user.id}: {type(e).__name__}: {e}")
+        await update.callback_query.answer("❌ Please join the channel and main group first.", show_alert=True)
     return False
 
 async def check_main_group_restriction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1457,7 +1445,9 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
             return await msg.reply_text(f"Sorry Too Late 💔 {winner} He got This Character🧨 try Next Character Spawn ❄", parse_mode='HTML', reply_to_message_id=msg.message_id)
         card = drop['card']
-        if requested != str(card['name']).casefold():
+        full_name = " ".join(str(card['name']).split()).casefold()
+        first_name = full_name.split()[0] if full_name else ""
+        if requested != full_name and requested != first_name:
             return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
         try:
             async with db_pool.acquire() as conn:
@@ -1476,25 +1466,16 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await msg.reply_text("❌ Could not award this card. Please try again.", reply_to_message_id=msg.message_id)
         drop['winner_id'], drop['winner_name'], drop['ended'] = user.id, user.first_name, True
 
-    # Winner animation: each emoji is shown for 3 seconds, in order.
+    # Winner animation: show each symbol for 1.5 seconds.
     animation_msg = None
     try:
-        animation_msg = await context.bot.send_message(chat.id, '🌸', reply_to_message_id=msg.message_id)
+        animation_msg = await context.bot.send_message(chat.id, '🪄', reply_to_message_id=msg.message_id)
+        await asyncio.sleep(1.5)
+        await context.bot.edit_message_text(chat_id=chat.id, message_id=animation_msg.message_id, text='⭐')
+        await asyncio.sleep(1.5)
+        await context.bot.delete_message(chat.id, animation_msg.message_id)
     except Exception as e:
-        print(f"Could not start winner animation: {e}")
-    for emoji in ('❄', '⚡'):
-        await asyncio.sleep(3)
-        if animation_msg:
-            try:
-                await context.bot.edit_message_text(chat_id=chat.id, message_id=animation_msg.message_id, text=emoji)
-            except Exception as e:
-                print(f"Could not update winner animation: {e}")
-    await asyncio.sleep(3)
-    if animation_msg:
-        try:
-            await context.bot.delete_message(chat.id, animation_msg.message_id)
-        except Exception:
-            pass
+        print(f"Could not complete winner animation: {e}")
 
     rarity = get_rarity_display(card.get('rarity', 'Ten'))
     collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
@@ -1520,7 +1501,14 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     drop = active_card_drops[replied.message_id]
     if drop['ended'] or time.time() >= drop['expires_at']:
         return await msg.reply_text('⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ကောက်လို့မရတော့ပါ။', reply_to_message_id=msg.message_id)
-    return await msg.reply_text(f"Use This - <code>/mm {drop['card']['name']}</code>", parse_mode='HTML', reply_to_message_id=msg.message_id)
+    claim_command = f"/mm {drop['card']['name']}"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command))
+    ]])
+    return await msg.reply_text(
+        f"Use This - <code>{claim_command}</code>",
+        parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id
+    )
 
 
 async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -4301,17 +4289,18 @@ def tg_game_keyboard(round_id, bot_username):
 
 def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွင့်ထားသည်"):
     return (
-        "━━━━━━━━━━━━━━━━━━\n"
-        "🐅 <b>ကျားနဂါးတိုက်ပွဲ</b> 🐉\n"
-        "<b>𝐓𝐈𝐆𝐄𝐑  ⚔️  𝐃𝐑𝐀𝐆𝐎𝐍</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "🐅 <b>ကျား TIGER</b>                 🐉 <b>နဂါး DRAGON</b>\n"
-        f"<b>💰 {round_state['tiger_total']:,} Kachi</b>       "
-        f"<b>💰 {round_state['dragon_total']:,} Kachi</b>\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"⏳ <b>{status}</b>\n"
-        "💎 အများဆုံးလောင်းကြေး — <b>100,000 Kachi</b>\n"
-        "👇 <b>ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ</b>"
+        "━━━━━━━━━━━━━━━━━━━━\\n"
+        "       🐅 <b>TIGER  ⚔️  DRAGON</b> 🐉\\n"
+        "          <b>ကျား နဂါး တိုက်ပွဲ</b>\\n"
+        "━━━━━━━━━━━━━━━━━━━━\\n\\n"
+        "🐅 <b>ကျား (TIGER)</b>\\n"
+        f"      💰 <b>{round_state['tiger_total']:,} Kachi</b>\\n\\n"
+        "🐉 <b>နဂါး (DRAGON)</b>\\n"
+        f"      💰 <b>{round_state['dragon_total']:,} Kachi</b>\\n"
+        "━━━━━━━━━━━━━━━━━━━━\\n"
+        f"⏳ <b>{status}</b>\\n"
+        "💎 အများဆုံးလောင်းကြေး: <b>100,000 Kachi</b>\\n"
+        "👇 အောက်က ခလုတ်တစ်ခုကိုရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ"
     )
 
 
@@ -4906,378 +4895,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("✅ Rarity mode updated successfully!")
         return
 
-    if data.startswith("kshop_rarity_"):
-        parts = data.split("_")
-        allowed_uid = int(parts[2])
-        rarity = " ".join(parts[3:])
-
-        if user.id != allowed_uid:
-            return await query.answer("❌ This is not for you!", show_alert=True)
-
-        await render_kshop_card(query, context, user.id, rarity, 0)
-        await query.answer()
-        return
-
-    if data.startswith("kshop_nav_"):
-        parts = data.split("_")
-        allowed_uid = int(parts[2])
-        target_idx = int(parts[-1])
-        rarity = " ".join(parts[3:-1])
-
-        if user.id != allowed_uid:
-            return await query.answer("❌ This is not for you!", show_alert=True)
-
-        await render_kshop_card(query, context, user.id, rarity, target_idx)
-        await query.answer()
-        return
-
-    if data.startswith("kshop_buy_"):
-        parts = data.split("_")
-        allowed_uid = int(parts[2])
-        price = int(parts[-1])
-        card_id = parts[-2]
-        rarity = " ".join(parts[3:-2])
-
-        if user.id != allowed_uid:
-            return await query.answer("❌ This is not for you!", show_alert=True)
-
-        async with db_pool.acquire() as conn:
-            async with conn.transaction():
-                user_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
-                coins = user_row['coins'] if user_row else 1000
-
-                if coins < price:
-                    return await query.answer(f"❌ Insufficient Kachi! You need {price} Kachi (Current: {coins}).", show_alert=True)
-
-                owned_row = await conn.fetchrow(
-                    "SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2 FOR UPDATE",
-                    user.id, card_id
-                )
-                owned_amount = owned_row["amount"] if owned_row else 0
-                if owned_amount >= USER_CARD_MAX_PER_ID:
-                    return await query.answer(
-                        "❌ You can own a maximum of 3 copies of the same card.",
-                        show_alert=True
-                    )
-
-                new_coins = coins - price
-                await conn.execute("UPDATE users SET coins = $1 WHERE user_id = $2", new_coins, user.id)
-
-                added = await add_user_card_with_limit(conn, user.id, card_id, 1)
-                if not added:
-                    return await query.answer(
-                        "❌ You can own a maximum of 3 copies of the same card.",
-                        show_alert=True
-                    )
-                await check_and_auto_lock_card(conn, card_id)
-
-                card_info = await conn.fetchrow("SELECT name FROM cards WHERE card_id = $1", card_id)
-                card_name = card_info['name'] if card_info else card_id
-
-        return await query.answer(f"✅ Successfully bought {card_name} for {price} Kachi!", show_alert=True)
-
-    if data.startswith("kshop_back_"):
-        allowed_uid = int(data.split("_")[2])
-        if user.id != allowed_uid:
-            return await query.answer("❌ This is not for you!", show_alert=True)
-
-        text = f"""Hello {user.first_name}
-You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here"""
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🎀 Birthday Special", callback_data=f"kshop_rarity_{user.id}_Birthday Special"),
-                InlineKeyboardButton("🎐 Yugen", callback_data=f"kshop_rarity_{user.id}_Yugen")
-            ],
-            [
-                InlineKeyboardButton("🧬 Shinsei", callback_data=f"kshop_rarity_{user.id}_Shinsei"),
-                InlineKeyboardButton("🪞 Kiwami", callback_data=f"kshop_rarity_{user.id}_Kiwami")
-            ],
-            [
-                InlineKeyboardButton("✨ Kami", callback_data=f"kshop_rarity_{user.id}_Kami")
-            ]
-        ])
-        try:
-            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=keyboard)
-        except Exception:
-            try:
-                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=keyboard)
-            except Exception:
-                pass
-        await query.answer()
-        return
-
-    if data == "aa_noop":
-        return await query.answer("ℹ️ ဒါက အဖြေပြသသည့် ခလုတ်ဖြစ်ပါသည်။ အောက်နားရှိ အဖြေမှန်ရွေးရန် ခလုတ်ကို နှိပ်ပါ။", show_alert=True)
-
-    if data.startswith("aa_sel_"):
-        idx = int(data.split("_")[2])
-        quiz = pending_quizzes.get(msg_id)
-        if not quiz:
-            return await query.answer("❌ Quiz preview မရှိတော့ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။", show_alert=True)
-        
-        quiz["correct"] = quiz["options"][idx]
-        correct_opt = quiz["correct"]
-        
-        updated_text = f"❓ <b>Trivia Quiz Preview</b>\n\n<b>{quiz['question']}</b>\n\n✅ <b>အဖြေမှန်ရွေးချယ်ပြီးပါပြီ:</b> <code>{correct_opt}</code>\n\n<i>ယခုထုတ်လွှင့်ရန် `/send` ကို အသုံးပြုနိုင်ပါပြီ။</i>"
-        
-        keyboard = []
-        for o_idx, opt in enumerate(quiz["options"]):
-            prefix = "⭐" if opt == correct_opt else "📌"
-            keyboard.append([InlineKeyboardButton(f"{prefix} {opt}", callback_data="aa_noop")])
-        
-        select_row = []
-        for o_idx, opt in enumerate(quiz["options"]):
-            btn_text = f"✅ ရွေးပြီး ({o_idx+1})" if opt == correct_opt else f"အဖြေမှန် ({o_idx+1})"
-            select_row.append(InlineKeyboardButton(btn_text, callback_data=f"aa_sel_{o_idx}"))
-        keyboard.append(select_row)
-
-        try:
-            await query.edit_message_text(updated_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception:
-            pass
-        await query.answer(f"✅ အဖြေမှန်အဖြစ် '{correct_opt}' ကို သတ်မှတ်ပြီးပါပြီ။", show_alert=True)
-        return
-
-    if data.startswith("ans_"):
-        parts = data.split("_")
-        quiz_uuid = parts[1]
-        chosen_idx = int(parts[2])
-
-        quiz = active_quizzes.get(msg_id)
-        if not quiz or quiz["solved"]:
-            solved = True
-        else:
-            solved = False
-            if user.id in quiz["answered_users"]:
-                already_answered = True
-            else:
-                already_answered = False
-                quiz["answered_users"].add(user.id)
-
-        if solved:
-            return await query.answer("❌ အဖြေမှန်ကို အခြားသူ ဖြေဆိုပြီးပါပြီ (သို့မဟုတ်) Quiz ပြီးဆုံးသွားပါပြီ။", show_alert=True)
-
-        if already_answered:
-            return await query.answer("❌ သင် ဖြေဆိုပြီးဖြစ်ပါသည်။ တစ်ဦးလျှင် တစ်ကြိမ်သာ ဖြေဆိုခွင့်ရှိသည်။", show_alert=True)
-
-        chosen_opt = quiz["options"][chosen_idx]
-        if chosen_opt == quiz["correct"]:
-            quiz["solved"] = True
-
-            coins_won = random.randint(1000, 3000)
-            await add_coins(user.id, coins_won)
-
-            result_text = f"""✅ <b>အဖြေမှန်သွားပါပြီ!</b>
-
-❓ <b>{quiz['question']}</b>
-👤 <b>အနိုင်ရသူ:</b> {get_mention(user.id, user.first_name)}
-💰 <b>ရရှိသော Kachi:</b> +{coins_won} 🩸
-
-CHECK /kc Use Kachi"""
-
-            try:
-                await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=None)
-            except Exception:
-                pass
-            await query.answer(f"🎉 မှန်ကန်ပါသည်။ +{coins_won} Kachi ရရှိပါသည်!", show_alert=True)
-        else:
-            quiz["wrong_users"].add(user.id)
-            wrong_count = len(quiz["wrong_users"])
-            is_exhausted = wrong_count >= 2
-            if is_exhausted:
-                quiz["solved"] = True
-
-            if is_exhausted:
-                expired_text = f"❌ <b>မှားဖြေခွင့်ကုန်သွားပါပြီ!</b>\n\n❓ <b>{quiz['question']}</b>\n\n✅ <b>အဖြေမှန်:</b> <code>{quiz['correct']}</code>"
-                try:
-                    await query.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=expired_text,
-                        parse_mode="HTML",
-                        reply_markup=None
-                    )
-                except Exception:
-                    pass
-                await query.answer("❌ မှားဖြေခွင့်ကုန်သွားပါပြီ။", show_alert=True)
-            else:
-                await query.answer("❌ အဖြေမှားနေပါသည်!", show_alert=True)
-        return
-
-    if data == "menu_help":
-        help_text = """📖 <b>အကူအညီနှင့် လမ်းညွှန်ချက်များ (Help & Guidelines)</b>
-
-- Bot ကို Group ထဲသို့ထည့်ပြီး စာပေးပို့ပါက သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်သည်နှင့် ကတ်များ အလိုအလျောက်ကျလာမည်ဖြစ်ပါသည်။
-- /ktop - Global Leaderboard ကို ကြည့်ရန်။
-- /kgtop - Group Leaderboard ကို ကြည့်ရန်။
-- /card [card_id] - ကတ်အသေးစိတ်နှင့် ပိုင်ရှင်များကို ကြည့်ရန်။
-- /set [card_id] - /kc တွင်ပြသရန် ပရိုဖိုင်ကတ်အဖြစ် သတ်မှတ်ရန်။"""
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back")]])
-        try:
-            await query.edit_message_text(help_text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            pass
-        await query.answer()
-        return
-
-    if data == "menu_kgift":
-        kgift_text = """🎁 <b>လက်ဆောင်ပေးခြင်း (Gift) လမ်းညွှန်ချက်များ</b>
-
-user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပါအတိုင်း ပေးပို့ပါ -
-- /kgift [card_id] - သတ်မှတ်ထားသော ကတ်တစ်ခု ပေးပို့ရန် (ဥပမာ - /kgift 1201)"""
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back")]])
-        try:
-            await query.edit_message_text(kgift_text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            pass
-        await query.answer()
-        return
-
-    if data == "menu_ksellcard":
-        bot_info = await context.bot.get_me()
-        ksell_text = f"""💸 <b>Heyy Wanna Sell Card? So Come Dm</b>
-
-ကဒ်ရောင်းလိုပါက Bot ၏ DM (Private Chat) သို့သွားရောက်၍ အောက်ပါပုံစံအတိုင်း ရိုက်ထည့်ပေးပါ -
-👉 `/ksellcard [card_id] [card_id]x[amount]`
-ဥပမာ: `/ksellcard 1296 827x2`"""
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Sell Card 💸", url=f"https://t.me/{bot_info.username}?start=sellcard")],
-            [InlineKeyboardButton("◀️ Back", callback_data="menu_back")]
-        ])
-        try:
-            await query.edit_message_text(ksell_text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            pass
-        await query.answer()
-        return
-
-    if data == "menu_back":
-        bot_info = await context.bot.get_me()
-        text = f"""👋 မင်္ဂလာပါ {get_mention(user.id, user.first_name)} !
-
-🌺 Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏 မှ ကြိုဆိုပါတယ်!
-
-📌 <b>အသုံးပြုပုံ ညွှန်ကြားချက်များ -</b>
-- Bot ကို Group ထဲသို့ ထည့်ပါ။
-- Group ထဲတွင် စာပေးပို့ပါ (သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက ကတ်များ အလိုအလျောက် ကျလာပါမည်)။
-- ဦးဆောင်သူစာရင်းများကို ကြည့်ရန် /ktop ကို အသုံးပြုပါ။"""
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Help 📖", callback_data="menu_help"),
-                InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift")
-            ],
-            [
-                InlineKeyboardButton("Sell Card 💸", callback_data="menu_ksellcard")
-            ],
-            [
-                InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true")
-            ]
-        ])
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
-        except Exception:
-            pass
-        await query.answer()
-        return
-
-    if data.startswith("addrarity_"):
-        _, allowed_uid_text, rarity = data.split("_", 2)
-        allowed_uid = int(allowed_uid_text)
-
-        if user.id != allowed_uid:
-            return await query.answer("❌ Not for you.", show_alert=True)
-        if rarity in ("Beyond", "Birthday Special") and user.id != ADMIN_ID:
-            return await query.answer("❌ Only the Bot Admin can add this rarity.", show_alert=True)
-
-        card_info = pending_card_adds.get(user.id)
-        if card_info:
-            del pending_card_adds[user.id]
-
-        if not card_info:
-            return await query.answer("❌ Card addition session expired.", show_alert=True)
-
-        card_info["rarity"] = rarity
-
-        collections_list = [
-            "🎞 Ope Ope No Mi [ 🩺]",
-            "🎞 Hito Hito No Mi [🌕]",
-            "🎞 Mera Mera No Mi [🔥]",
-            "🎞 Hana Hana No Mi [🌸]",
-            "🎞 Yomi Yomi No Mi [💀]",
-            "🎞 Tori Tori No Mi [🦅]",
-            "🎞 Yami Yami No Mi [🌑]"
-        ]
-        selected_collection = random.choice(collections_list)
-
-        card_id = card_info["card_id"]
-        card_name = card_info["card_name"]
-        c_type = card_info["type"]
-        file_id = card_info["file_id"]
-        is_card_admin = card_info["is_card_admin"]
-        
-        # Beyond cards are admin-sale-only and must not appear in ordinary drops.
-        is_locked = (rarity == "Beyond")
-
-        async with db_pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("""
-                    INSERT INTO cards (card_id, name, type, file_id, rarity, collection, is_locked)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """, card_id, card_name, c_type, file_id, rarity, selected_collection, is_locked)
-
-                added_reward_coins = 50 if rarity in ["Hoshi", "Ten"] else (80 if rarity in ["Kiwami", "Kami"] else (120 if rarity in ['Shinsei', 'Yugen', 'Kryora'] else 150))
-
-                if is_card_admin and user.id != ADMIN_ID:
-                    await conn.execute("""
-                        UPDATE users 
-                        SET coins = GREATEST(0, coins + $1) 
-                        WHERE user_id = $2
-                    """, added_reward_coins, user.id)
-
-        r_display = get_rarity_display(rarity)
-        lock_msg_note = ""
-        log_text = f"""New card added successfully
-
-❀ Card Name : {card_name}
-     ❝  ID : {card_id}
-❀ Type : {c_type.capitalize()}
-🌟 Rarity : {r_display}
-📚 Collection : {selected_collection}{lock_msg_note}
-👤 Added By : {get_mention(user.id, user.first_name)}"""
-
-        try:
-            if c_type == "photo":
-                asyncio.create_task(context.bot.send_photo(chat_id=CARD_LOG_CHANNEL_ID, photo=file_id, caption=log_text, parse_mode="HTML"))
-            else:
-                asyncio.create_task(context.bot.send_video(chat_id=CARD_LOG_CHANNEL_ID, video=file_id, caption=log_text, parse_mode="HTML"))
-        except Exception:
-            pass
-
-        reward_notice = f"\n🎉 Received <b>+{added_reward_coins} Kachi</b> for adding card!" if (is_card_admin and user.id != ADMIN_ID) else ""
-        try:
-            await query.message.edit_text(
-                f"✅ Card added successfully!\n\n🆔 Card ID: <code>{card_id}</code>\n🎴 Name: {card_name}\n🌟 Rarity: {r_display}\n📚 Collection: {selected_collection}{lock_msg_note}{reward_notice}",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-        await query.answer("✅ Card added successfully!")
-        return
-
     if data.startswith("check_join_"):
         target_uid = int(data.split("_")[2])
         if user.id != target_uid:
             return await query.answer("❌ Not for you.", show_alert=True)
         try:
-            member = await context.bot.get_chat_member(chat_id="@beyondpoe", user_id=user.id)
-            if member.status in ['left', 'kicked']:
-                return await query.answer("❌ Please join the channel first.", show_alert=True)
-            else:
-                await query.answer("✅ Thank you! You can now use commands.", show_alert=True)
-                try:
-                    await query.message.edit_text("✅ Verified! You can now use the bot.", parse_mode="HTML")
-                except Exception:
-                    pass
+            channel_member = await context.bot.get_chat_member(chat_id="@beyondpoe", user_id=user.id)
+            group_member = await context.bot.get_chat_member(chat_id="@Kachi_sGroup", user_id=user.id)
+            if channel_member.status in ['left', 'kicked'] or group_member.status in ['left', 'kicked']:
+                return await query.answer("❌ Please join the channel and main group first.", show_alert=True)
+            await query.answer("✅ Thank you! You can now use commands.", show_alert=True)
+            try:
+                await query.message.edit_text("✅ Verified! You have joined both required chats.", parse_mode="HTML")
+            except Exception:
+                pass
         except Exception:
             await query.answer("✅ Verified!", show_alert=True)
             try:
@@ -5484,7 +5115,6 @@ def main():
     app.add_handler(CommandHandler("kc", check_kc_cmd))
     app.add_handler(CommandHandler("khmode", khmode_cmd))
     app.add_handler(CommandHandler("resethmode", resethmode_cmd))
-    app.add_handler(CommandHandler("kshop", kshop_cmd))
     app.add_handler(CommandHandler("mm", mm_cmd))
     app.add_handler(CommandHandler("kname", kname_cmd))
     app.add_handler(CommandHandler("kachi", kachi_cmd))
@@ -5499,7 +5129,6 @@ def main():
     app.add_handler(CommandHandler("card", card_detail_cmd))
     app.add_handler(CommandHandler("ktop", ktop_cmd))
     app.add_handler(CommandHandler("kgtop", kgtop_cmd))
-    app.add_handler(CommandHandler("kg", kg_cmd))
     app.add_handler(CommandHandler("ksearch", ksearch_cmd))
     app.add_handler(CommandHandler("rede", rede_cmd))
 
