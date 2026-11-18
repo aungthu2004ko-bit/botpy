@@ -5,6 +5,7 @@ import random
 import re
 import string
 import time
+import datetime
 import uuid
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions
@@ -33,6 +34,7 @@ MAIN_GROUP_LINK = "https://t.me/Kachi_sGroup"
 group_threshold = {}
 pending_gifts = {}
 active_card_drops = {}
+card_drop_locks = {}
 pending_card_adds = {}
 pending_quizzes = {}
 active_quizzes = {}
@@ -205,6 +207,11 @@ async def _init_db_once():
             CREATE INDEX IF NOT EXISTS idx_user_cards_user_id ON user_cards(user_id);
             CREATE INDEX IF NOT EXISTS idx_user_cards_card_id ON user_cards(card_id);
             CREATE INDEX IF NOT EXISTS idx_group_members_chat_user ON group_members(chat_id, user_id);
+            CREATE TABLE IF NOT EXISTS kshop_daily_purchases (
+                user_id BIGINT NOT NULL, purchase_date DATE NOT NULL,
+                purchase_count INT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, purchase_date)
+            );
         """)
 
         try:
@@ -1368,64 +1375,121 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_to_message_id=msg_id
             )
 
+async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
+    r_emoji = get_rarity_emoji(card.get('rarity', 'Ten'))
+    caption = (f"{r_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
+               "📯 Fast to Catch 🐌 Use - /mm name\nReply /kname to this card to copy the claim command.")
+    try:
+        if card['type'] == 'photo':
+            msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
+        else:
+            msg = await context.bot.send_video(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
+    except Exception as e:
+        print(f"Could not send character spawn: {e}")
+        return None
+    active_card_drops[msg.message_id] = {'chat_id': chat_id, 'card': card, 'winner_id': None,
+        'winner_name': None, 'ended': False, 'expires_at': time.time() + 60}
+    asyncio.create_task(run_character_drop_timer(context, msg.message_id))
+    return msg
+
+
 @restricted_command
 async def spw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg_id = update.message.message_id
-    chat = update.effective_chat
+    msg, chat = update.effective_message, update.effective_chat
     if update.effective_user.id != ADMIN_ID:
         return
-
     async with db_pool.acquire() as conn:
         if context.args:
             target_id = context.args[0].strip()
-            card = await conn.fetchrow("SELECT card_id, name, type, file_id, rarity, collection FROM cards WHERE card_id = $1", target_id)
+            card = await conn.fetchrow("SELECT card_id, name, type, file_id, rarity, collection FROM cards WHERE card_id=$1", target_id)
             if not card:
-                return await update.message.reply_text(f"❌ Card ID <code>{target_id}</code> not found in database.", parse_mode="HTML", reply_to_message_id=msg_id)
+                return await msg.reply_text(f"❌ Card ID <code>{target_id}</code> not found in database.", parse_mode='HTML', reply_to_message_id=msg.message_id)
             if card.get('rarity') in ('Beyond', 'Birthday Special'):
-                return await update.message.reply_text("❌ Admin-only cards cannot be spawned as normal drops.", reply_to_message_id=msg_id)
+                return await msg.reply_text("❌ Admin-only cards cannot be spawned as normal drops.")
         else:
-            cards = await conn.fetch("SELECT card_id, name, type, file_id, rarity, collection FROM cards WHERE rarity NOT IN ('Birthday Special', 'Beyond')")
+            cards = await conn.fetch("SELECT card_id, name, type, file_id, rarity, collection FROM cards WHERE rarity NOT IN ('Birthday Special','Beyond')")
             if not cards:
-                return await update.message.reply_text("❌ No cards available in database!", reply_to_message_id=msg_id)
+                return await msg.reply_text("❌ No cards available in database!")
             card = random.choice(cards)
+    await send_character_spawn(context, chat.id, card, msg.message_id)
 
-    r = card.get('rarity', 'Ten')
-    r_emoji = get_rarity_emoji(r)
-    col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
 
-    joined_names = []
-    joined_str = "\n".join(joined_names) if joined_names else "<i>No one joined yet.</i>"
-
-    drop_text = f"""{r_emoji} A Character Card Spawned In The Chat ❄
-
-[ 𝗝𝗢𝗜𝗡 ] Fast For The Claim
- Card ❀
-
-{joined_str}
-
-GoodLuck 🍀 Time (50sec)"""
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("𝗝𝗢𝗜𝗡(0/5)", callback_data="join_card_drop")
-    ]])
-
+@restricted_command
+async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not context.args:
+        return await msg.reply_text("Use: /mm character name", reply_to_message_id=msg.message_id)
+    requested = " ".join(context.args).strip().casefold()
+    found = next(((mid, d) for mid, d in list(active_card_drops.items())
+                  if d['chat_id'] == chat.id and time.time() < d['expires_at']), None)
+    if not found:
+        return await msg.reply_text("❄ No active character spawn right now.", reply_to_message_id=msg.message_id)
+    drop_id, drop = found
+    lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
+    async with lock:
+        if drop['ended'] or time.time() >= drop['expires_at']:
+            return await msg.reply_text("⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ပြန်ကောက်နိုင်ပါမယ်။", reply_to_message_id=msg.message_id)
+        if drop['winner_id'] is not None:
+            winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
+            return await msg.reply_text(f"Sorry Too Late 💔 {winner} He got This Character🧨 try Next Character Spawn ❄", parse_mode='HTML', reply_to_message_id=msg.message_id)
+        card = drop['card']
+        if requested != str(card['name']).casefold():
+            return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
+        try:
+            async with db_pool.acquire() as conn:
+                async with conn.transaction():
+                    owned = await conn.fetchval("SELECT amount FROM user_cards WHERE user_id=$1 AND card_id=$2 FOR UPDATE", user.id, card['card_id'])
+                    if (owned or 0) >= USER_CARD_MAX_PER_ID:
+                        return await msg.reply_text("❌ You already own the maximum copies of this card.", reply_to_message_id=msg.message_id)
+                    added = await add_user_card_with_limit(conn, user.id, card['card_id'], 1)
+                    if not added:
+                        return await msg.reply_text("❌ You already own the maximum copies of this card.", reply_to_message_id=msg.message_id)
+                    await check_and_auto_lock_card(conn, card['card_id'])
+        except Exception as e:
+            print(f"Error awarding spawned card: {e}")
+            return await msg.reply_text("❌ Could not award this card. Please try again.", reply_to_message_id=msg.message_id)
+        drop['winner_id'], drop['winner_name'], drop['ended'] = user.id, user.first_name, True
+    rarity = get_rarity_display(card.get('rarity', 'Ten'))
+    collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
+    caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
+               f"❀Cᴀʀᴅ - {card['name']}\n         ✿ {card['card_id']}\n"
+               f"❀RARITY - {rarity}\n      ✿ {collection}")
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}')]])
     try:
         if card['type'] == 'photo':
-            msg = await context.bot.send_photo(chat.id, card['file_id'], caption=drop_text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
+            await context.bot.send_photo(chat.id, card['file_id'], caption=caption, parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id)
         else:
-            msg = await context.bot.send_video(chat.id, card['file_id'], caption=drop_text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
-    except Exception:
+            await context.bot.send_video(chat.id, card['file_id'], caption=caption, parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id)
+    except Exception as e:
+        print(f"Could not send claimed card: {e}")
+
+
+@restricted_command
+async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    replied = msg.reply_to_message
+    if not replied or replied.message_id not in active_card_drops:
+        return await msg.reply_text('Reply to an active spawned card with /kname.', reply_to_message_id=msg.message_id)
+    drop = active_card_drops[replied.message_id]
+    if drop['ended'] or time.time() >= drop['expires_at']:
+        return await msg.reply_text('⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ကောက်လို့မရတော့ပါ။', reply_to_message_id=msg.message_id)
+    return await msg.reply_text(f"Use This - <code>/mm {drop['card']['name']}</code>", parse_mode='HTML', reply_to_message_id=msg.message_id)
+
+
+async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
+    await asyncio.sleep(60)
+    drop = active_card_drops.get(msg_id)
+    if not drop:
         return
+    if drop['winner_id'] is None:
+        drop['ended'] = True
+        try:
+            await context.bot.send_message(drop['chat_id'], '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။', reply_to_message_id=msg_id)
+        except Exception as e:
+            print(f"Could not post expired notice: {e}")
+    active_card_drops.pop(msg_id, None)
+    card_drop_locks.pop(msg_id, None)
 
-    active_card_drops[msg.message_id] = {
-        "chat_id": chat.id,
-        "card": card,
-        "joined_users": {},
-        "timer": 50,
-        "ended": False
-    }
-
-    asyncio.create_task(run_card_drop_timer(context, msg.message_id))
 
 @restricted_command
 async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4054,11 +4118,12 @@ Status: Successful ✅
                         ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, groups.title)
                     """, chat_id, chat.title or "Group")
                     
-                    threshold = 80
+                    threshold = 90
 
                     row = await conn.fetchrow("""
                         UPDATE groups 
-                        SET msg_count = CASE WHEN msg_count + 1 >= $2 THEN 0 ELSE msg_count + 1 END
+                        SET threshold = 90,
+                            msg_count = CASE WHEN msg_count + 1 >= $2 THEN 0 ELSE msg_count + 1 END
                         WHERE chat_id = $1
                         RETURNING msg_count, (msg_count = 0) AS should_drop
                     """, chat_id, threshold)
@@ -4070,196 +4135,18 @@ Status: Successful ✅
 
 async def trigger_card_drop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     try:
-        anim_msg = await context.bot.send_message(chat_id, "🐌")
+        anim = await context.bot.send_message(chat_id, '🐌')
     except Exception:
-        anim_msg = None
-
+        anim = None
     await asyncio.sleep(2.5)
-    if anim_msg:
-        try:
-            asyncio.create_task(context.bot.delete_message(chat_id, anim_msg.message_id))
-        except Exception:
-            pass
-
+    if anim:
+        try: await context.bot.delete_message(chat_id, anim.message_id)
+        except Exception: pass
     async with db_pool.acquire() as conn:
-        drop_card = await get_weighted_random_card(conn)
-    if not drop_card:
-        return
+        card = await get_weighted_random_card(conn)
+    if card:
+        await send_character_spawn(context, chat_id, card)
 
-    r = drop_card.get('rarity', 'Ten')
-    r_emoji = get_rarity_emoji(r)
-
-    joined_names = []
-    joined_str = "\n".join(joined_names) if joined_names else "<i>No one joined yet.</i>"
-
-    drop_text = f"""{r_emoji} A Character Card Spawned In The Chat ❄
-
-[ 𝗝𝗢𝗜𝗡 ] Fast For The Claim
- Card ❀
-
-{joined_str}
-
-GoodLuck 🍀 Time (50sec)"""
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("𝗝𝗢𝗜𝗡(0/5)", callback_data="join_card_drop")
-    ]])
-
-    try:
-        if drop_card['type'] == 'photo':
-            msg = await context.bot.send_photo(chat_id, drop_card['file_id'], caption=drop_text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            msg = await context.bot.send_video(chat_id, drop_card['file_id'], caption=drop_text, parse_mode="HTML", reply_markup=keyboard)
-    except Exception:
-        return
-
-    active_card_drops[msg.message_id] = {
-        "chat_id": chat_id,
-        "card": drop_card,
-        "joined_users": {},
-        "timer": 50,
-        "ended": False
-    }
-
-    asyncio.create_task(run_card_drop_timer(context, msg.message_id))
-
-async def run_card_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    while True:
-        await asyncio.sleep(5)
-        drop = active_card_drops.get(msg_id)
-        if not drop or drop["ended"]:
-            break
-
-        drop["timer"] -= 5
-        if drop["timer"] <= 0 or len(drop["joined_users"]) >= 5:
-            drop["ended"] = True
-            should_finalize = True
-        else:
-            should_finalize = False
-            current_count = len(drop["joined_users"])
-            chat_id = drop["chat_id"]
-            card_copy = drop["card"]
-            joined_copy = dict(drop["joined_users"])
-            timer_val = drop["timer"]
-
-        if should_finalize:
-            asyncio.create_task(finalize_card_drop(context, msg_id))
-            break
-
-        r = card_copy.get('rarity', 'Ten')
-        r_emoji = get_rarity_emoji(r)
-
-        joined_names = [f"• {get_mention(uid, name)}" for uid, name in joined_copy.items()]
-        joined_str = "\n".join(joined_names) if joined_names else "<i>No one joined yet.</i>"
-
-        drop_text = f"""{r_emoji} A Character Card Spawned In The Chat ❄
-
-[ 𝗝𝗢𝗜𝗡 ] Fast For The Claim
- Card ❀
-
-{joined_str}
-
-GoodLuck 🍀 Time ({timer_val}sec)"""
-
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"𝗝𝗢𝗜𝗡({current_count}/5)", callback_data="join_card_drop")
-        ]])
-
-        try:
-            asyncio.create_task(context.bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=drop_text, parse_mode="HTML", reply_markup=keyboard))
-        except Exception:
-            pass
-
-async def finalize_card_drop(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    drop = active_card_drops.get(msg_id)
-    if not drop or drop.get("finalized"):
-        return
-    drop["finalized"] = True
-    drop["ended"] = True
-
-    chat_id = drop["chat_id"]
-    card = drop["card"]
-    joined = dict(drop["joined_users"])
-    
-    if msg_id in active_card_drops:
-        del active_card_drops[msg_id]
-
-    try:
-        asyncio.create_task(context.bot.delete_message(chat_id=chat_id, message_id=msg_id))
-    except Exception:
-        pass
-
-    try:
-        anim_msg = await context.bot.send_message(chat_id, "🐸")
-    except Exception:
-        anim_msg = None
-
-    await asyncio.sleep(2.5)
-    if anim_msg:
-        try:
-            asyncio.create_task(context.bot.delete_message(chat_id, anim_msg.message_id))
-        except Exception:
-            pass
-
-    if joined:
-        try:
-            async with db_pool.acquire() as conn:
-                async with conn.transaction():
-                    eligible_winners = []
-                    for participant_id, participant_name in joined.items():
-                        owned = await conn.fetchval(
-                            "SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2",
-                            participant_id, card['card_id']
-                        )
-                        if (owned or 0) < USER_CARD_MAX_PER_ID:
-                            eligible_winners.append((participant_id, participant_name))
-
-                    if not eligible_winners:
-                        winner_id = None
-                    else:
-                        winner_id, winner_name = random.choice(eligible_winners)
-                        added = await add_user_card_with_limit(conn, winner_id, card['card_id'], 1)
-                        if not added:
-                            winner_id = None
-                        else:
-                            await check_and_auto_lock_card(conn, card['card_id'])
-        except Exception as e:
-            print(f"Error updating db in finalize_card_drop: {e}")
-            winner_id = None
-
-        if winner_id is None:
-            await context.bot.send_message(
-                chat_id,
-                f"❌ Card drop for <b>{card['name']}</b> ended. All participants already own 3 copies.",
-                parse_mode="HTML"
-            )
-            return
-
-        r = card.get('rarity', 'Ten')
-        r_display = get_rarity_display(r)
-        col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
-        win_msg = f"⛩ Congratulations , {get_mention(winner_id, winner_name)} Now you got A new Card {card['name']} ID: {card['card_id']} Rarity: {r_display} | Collection: {col_name} ❄ Check /kc 🎗"
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{winner_id}")]
-        ])
-
-        try:
-            if card['type'] == 'photo':
-                asyncio.create_task(context.bot.send_photo(chat_id, photo=card['file_id'], caption=win_msg, parse_mode="HTML", reply_markup=keyboard))
-            else:
-                asyncio.create_task(context.bot.send_video(chat_id, video=card['file_id'], caption=win_msg, parse_mode="HTML", reply_markup=keyboard))
-        except Exception:
-            try:
-                asyncio.create_task(context.bot.send_message(chat_id, text=win_msg, parse_mode="HTML", reply_markup=keyboard))
-            except Exception:
-                pass
-    else:
-        win_msg = f"❌ Card drop for <b>{card['name']}</b> cancelled as no one joined."
-        try:
-            asyncio.create_task(context.bot.send_message(chat_id, text=win_msg, parse_mode="HTML"))
-        except Exception:
-            pass
 
 async def run_kbox_task(bot, chat_id, query, user_id, display_name):
     try:
@@ -4680,6 +4567,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         async with db_pool.acquire() as conn:
             async with conn.transaction():
+                today_myanmar = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=6, minutes=30))).date()
+                daily_row = await conn.fetchrow(
+                    "SELECT purchase_count FROM kshop_daily_purchases WHERE user_id=$1 AND purchase_date=$2 FOR UPDATE",
+                    user.id, today_myanmar
+                )
+                if daily_row and daily_row['purchase_count'] >= 5:
+                    return await query.answer("❌ Daily /kshop limit reached (5 cards per day).", show_alert=True)
                 user_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
                 coins = user_row['coins'] if user_row else 1000
 
@@ -4706,6 +4600,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "❌ You can own a maximum of 3 copies of the same card.",
                         show_alert=True
                     )
+                await conn.execute(
+                    """INSERT INTO kshop_daily_purchases (user_id, purchase_date, purchase_count) VALUES ($1,$2,1)
+                       ON CONFLICT (user_id, purchase_date) DO UPDATE SET purchase_count=kshop_daily_purchases.purchase_count+1""",
+                    user.id, today_myanmar
+                )
                 await check_and_auto_lock_card(conn, card_id)
 
                 card_info = await conn.fetchrow("SELECT name FROM cards WHERE card_id = $1", card_id)
@@ -5024,61 +4923,7 @@ user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပ
         return
 
     if data == "join_card_drop":
-        drop = active_card_drops.get(msg_id)
-        if not drop or drop["ended"]:
-            ended = True
-        else:
-            ended = False
-            if user.id in drop["joined_users"]:
-                already_joined = True
-            else:
-                already_joined = False
-                if len(drop["joined_users"]) >= 5:
-                    full = True
-                else:
-                    full = False
-                    drop["joined_users"][user.id] = user.first_name
-                    current_count = len(drop["joined_users"])
-                    is_full_now = current_count >= 5
-
-        if ended:
-            return await query.answer("❌ This card drop has ended.", show_alert=True)
-
-        if already_joined:
-            return await query.answer("❌ You have already joined.", show_alert=True)
-
-        if full:
-            return await query.answer("❌ Drop is full (5/5)!", show_alert=True)
-
-        await query.answer("✅ Successfully joined card drop!", show_alert=True)
-
-        if is_full_now:
-            asyncio.create_task(finalize_card_drop(context, msg_id))
-        else:
-            r = drop["card"].get('rarity', 'Ten')
-            r_emoji = get_rarity_emoji(r)
-
-            joined_names = [f"• {get_mention(uid, name)}" for uid, name in drop["joined_users"].items()]
-            joined_str = "\n".join(joined_names) if joined_names else "<i>No one joined yet.</i>"
-
-            drop_text = f"""{r_emoji} A Character Card Spawned In The Chat ❄
-
-[ 𝗝𝗢𝗜𝗡 ] Fast For The Claim
- Card ❀
-
-{joined_str}
-
-GoodLuck 🍀 Time ({drop['timer']}sec)"""
-
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"𝗝𝗢𝗜𝗡({current_count}/5)", callback_data="join_card_drop")
-            ]])
-
-            try:
-                await query.edit_message_caption(caption=drop_text, parse_mode="HTML", reply_markup=keyboard)
-            except Exception:
-                pass
-        return
+        return await query.answer("Use /mm character name to catch this card.", show_alert=True)
 
     if data.startswith("gift_"):
         parts = data.split("_")
@@ -5276,6 +5121,8 @@ def main():
     app.add_handler(CommandHandler("khmode", khmode_cmd))
     app.add_handler(CommandHandler("resethmode", resethmode_cmd))
     app.add_handler(CommandHandler("kshop", kshop_cmd))
+    app.add_handler(CommandHandler("mm", mm_cmd))
+    app.add_handler(CommandHandler("kname", kname_cmd))
     app.add_handler(CommandHandler("kachi", kachi_cmd))
     app.add_handler(CommandHandler("myre", myre_cmd))
     app.add_handler(CommandHandler("kslot", kslot_cmd))  
