@@ -207,11 +207,6 @@ async def _init_db_once():
             CREATE INDEX IF NOT EXISTS idx_user_cards_user_id ON user_cards(user_id);
             CREATE INDEX IF NOT EXISTS idx_user_cards_card_id ON user_cards(card_id);
             CREATE INDEX IF NOT EXISTS idx_group_members_chat_user ON group_members(chat_id, user_id);
-            CREATE TABLE IF NOT EXISTS kshop_daily_purchases (
-                user_id BIGINT NOT NULL, purchase_date DATE NOT NULL,
-                purchase_count INT NOT NULL DEFAULT 0,
-                PRIMARY KEY (user_id, purchase_date)
-            );
         """)
 
         try:
@@ -1388,7 +1383,7 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
         print(f"Could not send character spawn: {e}")
         return None
     active_card_drops[msg.message_id] = {'chat_id': chat_id, 'card': card, 'winner_id': None,
-        'winner_name': None, 'ended': False, 'expires_at': time.time() + 60}
+        'winner_name': None, 'ended': False, 'expires_at': time.time() + 300}
     asyncio.create_task(run_character_drop_timer(context, msg.message_id))
     return msg
 
@@ -1438,17 +1433,40 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    owned = await conn.fetchval("SELECT amount FROM user_cards WHERE user_id=$1 AND card_id=$2 FOR UPDATE", user.id, card['card_id'])
-                    if (owned or 0) >= USER_CARD_MAX_PER_ID:
-                        return await msg.reply_text("❌ You already own the maximum copies of this card.", reply_to_message_id=msg.message_id)
-                    added = await add_user_card_with_limit(conn, user.id, card['card_id'], 1)
-                    if not added:
-                        return await msg.reply_text("❌ You already own the maximum copies of this card.", reply_to_message_id=msg.message_id)
+                    # Spawn claims are unlimited; only /kshop has a 3-copy per-card cap.
+                    await conn.execute(
+                        """INSERT INTO user_cards (user_id, card_id, amount)
+                           VALUES ($1, $2, 1)
+                           ON CONFLICT (user_id, card_id)
+                           DO UPDATE SET amount = user_cards.amount + 1""",
+                        user.id, card['card_id']
+                    )
                     await check_and_auto_lock_card(conn, card['card_id'])
         except Exception as e:
             print(f"Error awarding spawned card: {e}")
             return await msg.reply_text("❌ Could not award this card. Please try again.", reply_to_message_id=msg.message_id)
         drop['winner_id'], drop['winner_name'], drop['ended'] = user.id, user.first_name, True
+
+    # Winner animation: each emoji is shown for 3 seconds, in order.
+    animation_msg = None
+    try:
+        animation_msg = await context.bot.send_message(chat.id, '🌸', reply_to_message_id=msg.message_id)
+    except Exception as e:
+        print(f"Could not start winner animation: {e}")
+    for emoji in ('❄', '⚡'):
+        await asyncio.sleep(3)
+        if animation_msg:
+            try:
+                await context.bot.edit_message_text(chat_id=chat.id, message_id=animation_msg.message_id, text=emoji)
+            except Exception as e:
+                print(f"Could not update winner animation: {e}")
+    await asyncio.sleep(3)
+    if animation_msg:
+        try:
+            await context.bot.delete_message(chat.id, animation_msg.message_id)
+        except Exception:
+            pass
+
     rarity = get_rarity_display(card.get('rarity', 'Ten'))
     collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
     caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
@@ -1477,7 +1495,7 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    await asyncio.sleep(60)
+    await asyncio.sleep(300)
     drop = active_card_drops.get(msg_id)
     if not drop:
         return
@@ -4138,7 +4156,7 @@ async def trigger_card_drop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         anim = await context.bot.send_message(chat_id, '🐌')
     except Exception:
         anim = None
-    await asyncio.sleep(2.5)
+    await asyncio.sleep(4)
     if anim:
         try: await context.bot.delete_message(chat_id, anim.message_id)
         except Exception: pass
@@ -4567,13 +4585,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         async with db_pool.acquire() as conn:
             async with conn.transaction():
-                today_myanmar = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=6, minutes=30))).date()
-                daily_row = await conn.fetchrow(
-                    "SELECT purchase_count FROM kshop_daily_purchases WHERE user_id=$1 AND purchase_date=$2 FOR UPDATE",
-                    user.id, today_myanmar
-                )
-                if daily_row and daily_row['purchase_count'] >= 5:
-                    return await query.answer("❌ Daily /kshop limit reached (5 cards per day).", show_alert=True)
                 user_row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
                 coins = user_row['coins'] if user_row else 1000
 
@@ -4600,11 +4611,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "❌ You can own a maximum of 3 copies of the same card.",
                         show_alert=True
                     )
-                await conn.execute(
-                    """INSERT INTO kshop_daily_purchases (user_id, purchase_date, purchase_count) VALUES ($1,$2,1)
-                       ON CONFLICT (user_id, purchase_date) DO UPDATE SET purchase_count=kshop_daily_purchases.purchase_count+1""",
-                    user.id, today_myanmar
-                )
                 await check_and_auto_lock_card(conn, card_id)
 
                 card_info = await conn.fetchrow("SELECT name FROM cards WHERE card_id = $1", card_id)
