@@ -954,6 +954,27 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 pass
 
+    # Tiger vs Dragon deep-link: tapping a channel button opens this DM directly.
+    if context.args and context.args[0].startswith("tg_"):
+        parts = context.args[0].split("_")
+        if len(parts) == 3 and parts[2] in ("T", "D"):
+            round_id, side = parts[1], parts[2]
+            round_state = tg_rounds.get(round_id)
+            if not round_state or not round_state.get("open"):
+                return await update.message.reply_text("⏰ ဒီပွဲရဲ့ လောင်းကြေးပိတ်သွားပါပြီ။ နောက်ပွဲမှာ ပြန်လောင်းနိုင်ပါတယ်။")
+            if user.id in round_state["bets"]:
+                return await update.message.reply_text("ဒီပွဲမှာ လောင်းကြေးထည့်ပြီးပါပြီ။")
+            if user.id in tg_pending_bets:
+                return await update.message.reply_text("လက်ရှိလောင်းကြေးပမာဏကို အရင်ထည့်ပေးပါ။")
+            tg_pending_bets[user.id] = {"round_id": round_id, "side": side}
+            side_name = "🐅 ကျား (TIGER)" if side == "T" else "🐉 နဂါး (DRAGON)"
+            return await update.message.reply_text(
+                f"━━━━━━━━━━━━━━━━━━\n{side_name} ကို ရွေးထားပါတယ်။\n"
+                "💰 လောင်းကြေးပမာဏကို ရိုက်ထည့်ပါ။\n"
+                "အနည်းဆုံး 1 မှ အများဆုံး 100,000 Kachi\n"
+                "ဥပမာ — 5000",
+            )
+
     bot_info = await context.bot.get_me()
     text = f"""👋 မင်္ဂလာပါ {get_mention(user.id, user.first_name)} !
 
@@ -4270,25 +4291,48 @@ TG_CARD_RANKS = (("A", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5),
                  ("J", 11), ("Q", 12), ("K", 13))
 
 
-def tg_game_keyboard(round_id):
+def tg_game_keyboard(round_id, bot_username):
+    # Deep links open the bot DM directly; start payload selects the side.
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🐅 ကျား (T) လောင်းမယ်", callback_data=f"tg_{round_id}_T"),
-        InlineKeyboardButton("🐉 နဂါး (D) လောင်းမယ်", callback_data=f"tg_{round_id}_D")
+        InlineKeyboardButton("🐅  ကျား (T) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_T"),
+        InlineKeyboardButton("🐉  နဂါး (D) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_D")
     ]])
 
 
-def tg_game_text(round_state, status="လောင်းကြေးဖွင့်ထားသည်"):
+def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွင့်ထားသည်"):
     return (
+        "━━━━━━━━━━━━━━━━━━\n"
         "🐅 <b>ကျားနဂါးတိုက်ပွဲ</b> 🐉\n"
-        "<b>𝐃𝐑𝐀𝐆𝐎𝐍 𝐕𝐬 𝐓𝐈𝐆𝐄𝐑</b>\n\n"
-        "🐅 <b>ကျား Tiger</b>                 🐉 <b>နဂါး Dragon</b>\n"
-        f"<b>{round_state['tiger_total']:,} Kachi</b>                 "
-        f"<b>{round_state['dragon_total']:,} Kachi</b>\n"
-        "\n"
-        f"⏳ {status}\n"
-        "💰 တစ်ကြိမ်လောင်းကြေး အများဆုံး 100,000 Kachi\n"
-        "📩 Button နှိပ်ပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ။"
+        "<b>𝐓𝐈𝐆𝐄𝐑  ⚔️  𝐃𝐑𝐀𝐆𝐎𝐍</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🐅 <b>ကျား TIGER</b>                 🐉 <b>နဂါး DRAGON</b>\n"
+        f"<b>💰 {round_state['tiger_total']:,} Kachi</b>       "
+        f"<b>💰 {round_state['dragon_total']:,} Kachi</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"⏳ <b>{status}</b>\n"
+        "💎 အများဆုံးလောင်းကြေး — <b>100,000 Kachi</b>\n"
+        "👇 <b>ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ</b>"
     )
+
+
+def tg_result_text(round_state, tiger_label, dragon_label, result_label, winners):
+    text = (
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🏁 <b>TIGER  VS  DRAGON — RESULT</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🐅 Tiger: <b>{tiger_label}</b>\n"
+        f"🐉 Dragon: <b>{dragon_label}</b>\n\n"
+        f"<b>{result_label}</b>\n\n"
+        f"🐅 Tiger Bet: <b>{round_state['tiger_total']:,}</b> Kachi\n"
+        f"🐉 Dragon Bet: <b>{round_state['dragon_total']:,}</b> Kachi\n\n"
+    )
+    if winners:
+        text += "🏆 <b>WINNERS</b>\n" + " · ".join(winners)
+    elif result_label.startswith("🤝"):
+        text += "🤝 <b>သရေဖြစ်သည် — လောင်းကြေး 2x ပြန်ရရှိပါသည်။</b>"
+    else:
+        text += "🏆 <b>ဒီပွဲမှာ အနိုင်ရသူ မရှိပါ။</b>"
+    return text
 
 
 @restricted_command
@@ -4327,6 +4371,7 @@ async def tg_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
     global tg_stop_requested, tg_current_round, tg_game_task
     try:
+        bot_info = await context.bot.get_me()
         while not tg_stop_requested:
             round_id = str(int(time.time() * 1000))
             round_state = {
@@ -4345,7 +4390,7 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
                     chat_id=TIGER_DRAGON_CHANNEL_ID,
                     text=tg_game_text(round_state),
                     parse_mode="HTML",
-                    reply_markup=tg_game_keyboard(round_id)
+                    reply_markup=tg_game_keyboard(round_id, bot_info.username)
                 )
                 round_state["message_id"] = game_msg.message_id
             except Exception as e:
@@ -4378,7 +4423,7 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
                 result_label = "🤝 သရေကျပါတယ်!"
 
             # Settle each stake exactly once. Stakes were deducted when accepted.
-            payout_lines = []
+            winner_mentions = []
             for bettor_id, bet in list(round_state["bets"].items()):
                 amount = bet["amount"]
                 if result == "DRAW":
@@ -4397,35 +4442,34 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
                                 "UPDATE users SET coins = coins + $1 WHERE user_id = $2",
                                 payout, bettor_id
                             )
-                payout_lines.append(
-                    f"• {get_mention(bettor_id, bet['name'])}: {outcome} — "
-                    f"{payout:,} Kachi"
-                )
+                if result != "DRAW" and bet["side"] == result:
+                    winner_mentions.append(get_mention(bettor_id, bet["name"]))
 
             round_state["settled"] = True
             tiger_label = f"{tiger_card[0]}{tiger_card[2]} ({tiger_card[1]})"
             dragon_label = f"{dragon_card[0]}{dragon_card[2]} ({dragon_card[1]})"
-            result_text = (
-                f"🃏 <b>ဖဲရလဒ်</b>\n\n"
-                f"🐅 Tiger: <b>{tiger_label}</b>\n"
-                f"🐉 Dragon: <b>{dragon_label}</b>\n\n"
-                f"<b>{result_label}</b>\n\n"
-                f"🐅 Tiger Total Bet: <b>{round_state['tiger_total']:,}</b> Kachi\n"
-                f"🐉 Dragon Total Bet: <b>{round_state['dragon_total']:,}</b> Kachi"
+            result_text = tg_result_text(
+                round_state, tiger_label, dragon_label, result_label, winner_mentions
             )
-            if payout_lines:
-                result_text += "\n\n<b>💰 Kachi ရလဒ်များ</b>\n" + "\n".join(payout_lines[:30])
-                if len(payout_lines) > 30:
-                    result_text += f"\n... နှင့် အခြား {len(payout_lines) - 30} ယောက်"
             try:
-                await context.bot.send_message(
+                # Reuse the round post for the result, then remove it before next round.
+                await context.bot.edit_message_text(
                     chat_id=TIGER_DRAGON_CHANNEL_ID,
+                    message_id=round_state["message_id"],
                     text=result_text,
-                    parse_mode="HTML",
-                    reply_to_message_id=round_state["message_id"]
+                    parse_mode="HTML"
                 )
             except Exception as e:
-                print(f"Tiger vs Dragon result send failed: {e}")
+                print(f"Tiger vs Dragon result update failed: {e}")
+
+            await asyncio.sleep(TG_NEXT_ROUND_SECONDS)
+            try:
+                await context.bot.delete_message(
+                    chat_id=TIGER_DRAGON_CHANNEL_ID,
+                    message_id=round_state["message_id"]
+                )
+            except Exception as e:
+                print(f"Tiger vs Dragon old post delete failed: {e}")
 
             tg_rounds.pop(round_id, None)
             if tg_current_round is round_state:
@@ -4437,7 +4481,6 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
 
             if tg_stop_requested:
                 break
-            await asyncio.sleep(TG_NEXT_ROUND_SECONDS)
 
     except Exception as e:
         print(f"Tiger vs Dragon loop error: {type(e).__name__}: {e}")
@@ -4540,16 +4583,23 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         tg_pending_bets.pop(user.id, None)
 
     await msg.reply_text(
-        f"✅ {side_name} ဘက်မှာ {amount:,} Kachi လောင်းပြီးပါပြီ။\n"
-        f"💰 လက်ကျန် Kachi: {updated['coins']:,}"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✅ <b>BET CONFIRMED</b>\n"
+        f"{side_name} ဘက် — <b>{amount:,} Kachi</b>\n"
+        f"💰 လက်ကျန် — <b>{updated['coins']:,} Kachi</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        "ပွဲရလဒ်ကို Channel မှာ ကြည့်နိုင်ပါတယ်။",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📣 Channel ကို ပြန်သွားမယ်", url="https://t.me/beyondpoe")]])
     )
     try:
+        bot_info = await context.bot.get_me()
         await context.bot.edit_message_text(
             chat_id=TIGER_DRAGON_CHANNEL_ID,
             message_id=round_state["message_id"],
             text=tg_game_text(round_state),
             parse_mode="HTML",
-            reply_markup=tg_game_keyboard(round_state["round_id"])
+            reply_markup=tg_game_keyboard(round_state["round_id"], bot_info.username)
         )
     except Exception as e:
         print(f"Tiger vs Dragon total bet update failed: {e}")
