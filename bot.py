@@ -8,7 +8,7 @@ import time
 import datetime
 import uuid
 import asyncpg
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
 from telegram.error import TelegramError, NetworkError, TimedOut
 from telegram.ext import (
     Application,
@@ -26,7 +26,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7940553702"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID", "@beyondpoe")
-CARD_LOG_CHANNEL_ID = "@kccardlogsch"
+CARD_LOG_CHANNEL_ID = "@beyondpoe"
 TIGER_DRAGON_CHANNEL_ID = "@beyondpoe"
 
 # Main Group Link for /kbox, /klot, /kdaily, and /pre restriction
@@ -345,24 +345,6 @@ def get_rarity_display(r):
         return r_emoji
     return f"{r_emoji} {r}"
 
-# Indicative user-to-user card trading prices (Kachi); these are not bot buyback prices.
-USER_MARKET_PRICE_RANGES = {
-    "Beyond": (280000, 300000),
-    "Raiden": (170000, 200000),
-    "Kryora": (150000, 180000),
-    "Yugen": (100000, 120000),
-    "Shinsei": (70000, 90000),
-    "Kiwami": (50000, 64000),
-    "Kami": (10000, 20000),
-    "Birthday Special": (8000, 10000),
-    "Hoshi": (5000, 7000),
-    "Ten": (3000, 5000),
-}
-
-def get_user_market_price(rarity):
-    low, high = USER_MARKET_PRICE_RANGES.get(rarity or "Ten", USER_MARKET_PRICE_RANGES["Ten"])
-    return f"{low:,}-{high:,} Kachi"
-
 # Rarity probabilities used only by /pre and /kbox.
 PRE_KBOX_RARITY_WEIGHTS = {
     "Ten": 45,
@@ -590,13 +572,13 @@ def get_mention(user_id, name):
     return f'<a href="tg://user?id={user_id}">{clean_name}</a>'
 
 async def get_weighted_random_card(conn):
-    # Birthday Special and Beyond never drop; Raiden is available only in normal drops.
-    all_cards = await conn.fetch("SELECT card_id, name, type, file_id, rarity, collection, is_locked FROM cards WHERE is_locked = FALSE AND rarity NOT IN ('Birthday Special', 'Beyond', 'Kryora')")
+    # Exclude Beyond and Birthday Special and Raiden and Kryora from regular drops/kbox
+    all_cards = await conn.fetch("SELECT card_id, name, type, file_id, rarity, collection, is_locked FROM cards WHERE is_locked = FALSE AND rarity NOT IN ('Birthday Special', 'Beyond', 'Raiden', 'Kryora')")
     if not all_cards:
-        all_cards = await conn.fetch("SELECT card_id, name, type, file_id, rarity, collection, is_locked FROM cards WHERE rarity NOT IN ('Birthday Special', 'Beyond', 'Kryora')")
+        all_cards = await conn.fetch("SELECT card_id, name, type, file_id, rarity, collection, is_locked FROM cards WHERE rarity NOT IN ('Birthday Special', 'Beyond', 'Raiden', 'Kryora')")
         if not all_cards:
             return None
-
+    
     weights = []
     for c in all_cards:
         r = c.get('rarity', 'Ten')
@@ -612,7 +594,7 @@ async def get_weighted_random_card(conn):
             weights.append(30)
         else:
             weights.append(30)
-
+            
     return random.choices(all_cards, weights=weights, k=1)[0]
 
 async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -622,26 +604,34 @@ async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if user.id == ADMIN_ID:
         return True
 
-    # A temporary Telegram/Railway network or API error must not silently
-    # disable every command. Enforce joining only when Telegram returns
-    # the user's actual membership status.
+    required_chats = (
+        ("@beyondpoe", "Join Channel 📢", "https://t.me/beyondpoe"),
+        ("@Kachi_sGroup", "Join Main Group 🏰", MAIN_GROUP_LINK),
+    )
+    missing = []
     try:
-        member = await context.bot.get_chat_member(chat_id="@beyondpoe", user_id=user.id)
+        for chat_id, button_text, join_url in required_chats:
+            member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
+            if member.status in ("left", "kicked"):
+                missing.append((button_text, join_url))
     except TelegramError as e:
+        # Preserve the existing fail-open behavior during temporary Telegram/API errors.
         print(f"Force-join check temporarily unavailable for user {user.id}: {type(e).__name__}: {e}")
         return True
     except Exception as e:
         print(f"Unexpected force-join check error for user {user.id}: {type(e).__name__}: {e}")
         return True
 
-    if member.status not in ['left', 'kicked']:
+    if not missing:
         return True
 
-    text = f"🐠 Hello {get_mention(user.id, user.first_name)}, please join our channel to use the bot 🩸"
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Join Channel 📢", url="https://t.me/beyondpoe")],
-        [InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}")]
-    ])
+    keyboard_rows = [[InlineKeyboardButton(label, url=url)] for label, url in missing]
+    keyboard_rows.append([InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}")])
+    text = (
+        f"🐠 Hello {get_mention(user.id, user.first_name)}, "
+        "please join our channel and main group to use the bot 🩸"
+    )
+    keyboard = InlineKeyboardMarkup(keyboard_rows)
     if update.message:
         try:
             await update.message.reply_text(
@@ -652,7 +642,7 @@ async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             print(f"Could not send force-join notice to user {user.id}: {type(e).__name__}: {e}")
     elif update.callback_query:
         try:
-            await update.callback_query.answer("❌ Please join the channel first.", show_alert=True)
+            await update.callback_query.answer("❌ Please join the required channel and group first.", show_alert=True)
         except Exception as e:
             print(f"Could not answer force-join callback for user {user.id}: {type(e).__name__}: {e}")
     return False
@@ -754,7 +744,18 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r_display = get_rarity_display(r)
     col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
 
-    market_price = get_user_market_price(r)
+    if r == 'Yugen':
+        coin_value = "18000-28000"
+    elif r == 'Shinsei':
+        coin_value = "9000-15000"
+    elif r == 'Kiwami':
+        coin_value = "5000-7300"
+    elif r == 'Kami':
+        coin_value = "4500-5700"
+    elif r == 'Hoshi':
+        coin_value = "1800-2800"
+    else:
+        coin_value = "1000-2500"
 
     caption_text = f"""🎗 Congratulations , {get_mention(user.id, display_name)} You Got A New Character in Pre 
 
@@ -764,7 +765,7 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🌟 Rarity - {r_display}
 📚 Collection - {col_name}
-💸 User-to-User Market Price ({market_price})
+🩸 Kachi Value ({coin_value})
    🐠 Global Drops - <b>{global_drop_count}</b> 
 
 ▰▰▱▱▰▰▱▱
@@ -998,6 +999,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift")
         ],
         [
+            InlineKeyboardButton("Sell Card 💸", callback_data="menu_ksellcard")
+        ],
+        [
             InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true")
         ]
     ])
@@ -1034,6 +1038,188 @@ Kachi Balance : {coins}"""
     ])
 
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
+
+@restricted_command
+async def ksellcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_force_join(update, context):
+        return
+    user = update.effective_user
+    chat = update.effective_chat
+    msg = update.message
+    msg_id = msg.message_id
+    await register_user_group(user, chat, context)
+
+    if chat.type in ["group", "supergroup"]:
+        return await msg.reply_text("❌ This command can only be used in Private Chat with the bot.", reply_to_message_id=msg_id)
+
+    if not context.args:
+        return await msg.reply_text(
+            "❌ <b>ကတ်ရောင်းချလိုပါက အောက်ပါပုံစံအတိုင်း ရိုက်ထည့်ပေးပါ -</b>\n"
+            "ဥပမာ: `/ksellcard 1296 827x2`",
+            parse_mode="HTML",
+            reply_to_message_id=msg_id
+        )
+
+    raw_items = context.args
+    items_to_sell = []
+
+    for token in raw_items:
+        token = token.strip()
+        if not token:
+            continue
+        c_id = None
+        qty = 1
+        if 'x' in token.lower():
+            parts = token.lower().split('x', 1)
+            p1 = parts[0].strip()
+            p2 = parts[1].strip()
+            if p1.isdigit() and p2.isdigit():
+                if len(p1) <= 2 and len(p2) >= 3:
+                    qty = int(p1)
+                    c_id = p2
+                else:
+                    c_id = p1
+                    qty = int(p2) if p2 else 1
+            elif p1.isdigit() and not p2:
+                c_id = p1
+                qty = 1
+            elif not p1.isdigit() and p2.isdigit():
+                qty = int(p2)
+                c_id = p1
+            else:
+                c_id = p1
+                qty = 1
+        else:
+            c_id = token
+            qty = 1
+
+        if c_id:
+            items_to_sell.append({"card_id": c_id, "amount": qty})
+
+    if not items_to_sell:
+        return await msg.reply_text("❌ No valid cards specified to sell.", reply_to_message_id=msg_id)
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            missing_cards = []
+            verified_sales = []
+            total_earned_coins = 0
+
+            for item in items_to_sell:
+                input_c_id = item['card_id']
+                req_amount = item['amount']
+
+                card_info = await conn.fetchrow("""
+                    SELECT card_id, name, rarity FROM cards 
+                    WHERE card_id = $1 
+                       OR ltrim(card_id, '0') = ltrim($1, '0') 
+                       OR card_id = ltrim($1, '0') 
+                       OR ltrim(card_id, '0') = $1
+                """, input_c_id)
+
+                if not card_info:
+                    missing_cards.append(f"Card ID <code>{input_c_id}</code> (Not found in DB)")
+                    continue
+
+                actual_card_id = card_info['card_id']
+                rarity = card_info['rarity'] or 'Ten'
+
+                user_card_row = await conn.fetchrow("""
+                    SELECT uc.amount FROM user_cards uc
+                    WHERE uc.user_id = $1 AND (
+                        uc.card_id = $2 
+                        OR ltrim(uc.card_id, '0') = ltrim($2, '0')
+                        OR uc.card_id = ltrim($2, '0')
+                        OR ltrim(uc.card_id, '0') = $2
+                    ) FOR UPDATE
+                """, user.id, actual_card_id)
+
+                owned_amount = user_card_row['amount'] if user_card_row else 0
+
+                if owned_amount < req_amount:
+                    missing_cards.append(f"<b>{card_info['name']}</b> (ID: <code>{actual_card_id}</code>) - Needed: {req_amount}x, Owned: {owned_amount}x")
+                else:
+                    item_coins_total = 0
+                    for _ in range(req_amount):
+                        if rarity == 'Beyond':
+                            item_coins_total += random.randint(200000, 300000)
+                        elif rarity == 'Birthday Special':
+                            item_coins_total += random.randint(8000, 12000)
+                        elif rarity == 'Raiden':
+                            item_coins_total += random.randint(100000, 138000)
+                        elif rarity == 'Kryora':
+                            item_coins_total += random.randint(70000, 89600)
+                        elif rarity == 'Yugen':
+                            item_coins_total += random.randint(36000, 56000)
+                        elif rarity == 'Shinsei':
+                            item_coins_total += random.randint(18000, 30000)
+                        elif rarity == 'Kiwami':
+                            item_coins_total += random.randint(10000, 14600)
+                        elif rarity == 'Kami':
+                            item_coins_total += random.randint(9000, 11400)
+                        elif rarity == 'Hoshi':
+                            item_coins_total += random.randint(3600, 5600)
+                        else:
+                            item_coins_total += random.randint(2000, 5000)
+
+                    total_earned_coins += item_coins_total
+                    verified_sales.append({
+                        "card_id": actual_card_id,
+                        "name": card_info['name'],
+                        "rarity": rarity,
+                        "amount": req_amount,
+                        "earned": item_coins_total
+                    })
+
+            if missing_cards:
+                missing_str = "\n".join(missing_cards)
+                return await msg.reply_text(
+                    f"❌ <b>You do not own the required cards or amounts!</b>\n\n{missing_str}",
+                    parse_mode="HTML",
+                    reply_to_message_id=msg_id
+                )
+
+            for vs in verified_sales:
+                c_id = vs['card_id']
+                req_amount = vs['amount']
+                uc_row = await conn.fetchrow("""
+                    SELECT card_id, amount FROM user_cards WHERE user_id = $1 AND card_id = $2 FOR UPDATE
+                """, user.id, c_id)
+                if not uc_row:
+                    continue
+                current_amt = uc_row['amount']
+                new_amt = current_amt - req_amount
+                if new_amt <= 0:
+                    await conn.execute("DELETE FROM user_cards WHERE user_id = $1 AND card_id = $2", user.id, c_id)
+                else:
+                    await conn.execute("UPDATE user_cards SET amount = $1 WHERE user_id = $2 AND card_id = $3", new_amt, user.id, c_id)
+
+            await conn.execute("""
+                UPDATE users 
+                SET coins = coins + $1 
+                WHERE user_id = $2
+            """, total_earned_coins, user.id)
+
+            user_updated = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1", user.id)
+            current_balance = user_updated['coins'] if user_updated else total_earned_coins
+
+    sales_desc_list = []
+    for vs in verified_sales:
+        r_display = get_rarity_display(vs['rarity'])
+        sales_desc_list.append(f"• {r_display} {vs['name']} (ID: <code>{vs['card_id']}</code>) — <b>{vs['amount']}x</b> (+{vs['earned']} Kachi)")
+    sales_desc_str = "\n".join(sales_desc_list)
+
+    success_receipt = f"""💸 <b>Card Sale Successful!</b>
+
+👤 <b>Seller:</b> {get_mention(user.id, user.first_name)}
+
+🎴 <b>Sold Cards:</b>
+{sales_desc_str}
+
+💎 <b>Total Earned:</b> +<b>{total_earned_coins}</b> Kachi 🩸
+💰 <b>Current Balance:</b> <b>{current_balance}</b> Kachi ✨"""
+
+    await msg.reply_text(success_receipt, parse_mode="HTML", reply_to_message_id=msg_id)
 
 @restricted_command
 async def kdaily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1224,7 +1410,9 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
     r_emoji = get_rarity_emoji(card.get('rarity', 'Ten'))
     caption = (f"{r_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
-               "📯 Fast to Catch 🐌 Use - /mm name\nReply /kname to this card to copy the claim command.")
+               "📯 Fast to Catch 🐌 Use - /mm name\n"
+               "Reply /kname to this card to copy the claim command\n"
+               "ကဒ်ကို RP ထောက်ပြီး /kname ရိုက်ပေးပါ")
     try:
         if card['type'] == 'photo':
             msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
@@ -1298,25 +1486,21 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await msg.reply_text("❌ Could not award this card. Please try again.", reply_to_message_id=msg.message_id)
         drop['winner_id'], drop['winner_name'], drop['ended'] = user.id, user.first_name, True
 
-    # Winner animation: each emoji is shown for 3 seconds, in order.
+    # Winner animation: show 🪄 then ⭐ for 1.5 seconds each before the card result.
     animation_msg = None
     try:
-        animation_msg = await context.bot.send_message(chat.id, '🌸', reply_to_message_id=msg.message_id)
+        animation_msg = await context.bot.send_message(chat.id, '🪄', reply_to_message_id=msg.message_id)
+        await asyncio.sleep(1.5)
+        await context.bot.edit_message_text(chat_id=chat.id, message_id=animation_msg.message_id, text='⭐')
+        await asyncio.sleep(1.5)
     except Exception as e:
-        print(f"Could not start winner animation: {e}")
-    for emoji in ('❄', '⚡'):
-        await asyncio.sleep(3)
+        print(f"Could not run winner animation: {e}")
+    finally:
         if animation_msg:
             try:
-                await context.bot.edit_message_text(chat_id=chat.id, message_id=animation_msg.message_id, text=emoji)
-            except Exception as e:
-                print(f"Could not update winner animation: {e}")
-    await asyncio.sleep(3)
-    if animation_msg:
-        try:
-            await context.bot.delete_message(chat.id, animation_msg.message_id)
-        except Exception:
-            pass
+                await context.bot.delete_message(chat.id, animation_msg.message_id)
+            except Exception:
+                pass
 
     rarity = get_rarity_display(card.get('rarity', 'Ten'))
     collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
@@ -1342,7 +1526,14 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     drop = active_card_drops[replied.message_id]
     if drop['ended'] or time.time() >= drop['expires_at']:
         return await msg.reply_text('⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ကောက်လို့မရတော့ပါ။', reply_to_message_id=msg.message_id)
-    return await msg.reply_text(f"Use This - <code>/mm {drop['card']['name']}</code>", parse_mode='HTML', reply_to_message_id=msg.message_id)
+    claim_command = f"/mm {drop['card']['name']}"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command))
+    ]])
+    return await msg.reply_text(
+        f"Use This - <code>{claim_command}</code>",
+        parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id
+    )
 
 
 async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -3643,7 +3834,28 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
     lock_str = "\n🔒 <b>Status: Locked</b>" if card.get('is_locked') else ""
 
-    market_price = get_user_market_price(r)
+    if r == 'Beyond':
+        coin_value = "200000-300000"
+    elif r == 'Birthday Special':
+        coin_value = "10000-16000"
+    elif r == 'Raiden':
+        coin_value = "100000-138000"
+    elif r == 'Kryora':
+        coin_value = "70000-89600"
+    elif r == 'Yugen':
+        coin_value = "36000-56000"
+    elif r == 'Shinsei':
+        coin_value = "18000-30000"
+    elif r == 'Kiwami':
+        coin_value = "10000-14600"
+    elif r == 'Kami':
+        coin_value = "9000-11400"
+    elif r == 'Hoshi':
+        coin_value = "3600-5600"
+    elif r == 'Ten':
+        coin_value = "2000-5000"
+    else:
+        coin_value = "2000-5000"
 
     caption_text = f"""🎗 Card Information ♡
 
@@ -3653,7 +3865,7 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎬 Type - {card['type'].upper()}
 🌟 Rarity - {r_display}
 📚 Collection - {col_name}{lock_str}
-💸 User-to-User Market Price ( {market_price} )
+🩸 Kachi Value ( {coin_value} )
    🐠 Global Drops - <b>{global_drop_count}</b>
 
 ▰▰▱▱▰▰▱▱▰▰
@@ -4047,14 +4259,12 @@ async def run_kbox_task(bot, chat_id, query, user_id, display_name):
         r = card.get('rarity', 'Ten')
         r_display = get_rarity_display(r)
         col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
-        market_price = get_user_market_price(r)
 
         result_caption = f"""🎉 Congratulations! {get_mention(user_id, display_name)} You got a card!
 Card Name : {card['name']}
 Id : <code>{card['card_id']}</code>
 Rarity : {r_display}
 Collection : {col_name}
-💸 User-to-User Market Price : {market_price}
 
 🔍 Check: /kc
 📖 Details: /card {card['card_id']}"""
@@ -4104,17 +4314,18 @@ def tg_game_keyboard(round_id, bot_username):
 
 def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွင့်ထားသည်"):
     return (
-        "━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "🐅 <b>ကျားနဂါးတိုက်ပွဲ</b> 🐉\n"
         "<b>𝐓𝐈𝐆𝐄𝐑  ⚔️  𝐃𝐑𝐀𝐆𝐎𝐍</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "🐅 <b>ကျား TIGER</b>                 🐉 <b>နဂါး DRAGON</b>\n"
-        f"<b>💰 {round_state['tiger_total']:,} Kachi</b>       "
-        f"<b>💰 {round_state['dragon_total']:,} Kachi</b>\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🐅 <b>ကျား TIGER</b>\n"
+        f"💰 <b>{round_state['tiger_total']:,} Kachi</b>\n\n"
+        "🐉 <b>နဂါး DRAGON</b>\n"
+        f"💰 <b>{round_state['dragon_total']:,} Kachi</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏳ <b>{status}</b>\n"
-        "💎 အများဆုံးလောင်းကြေး — <b>100,000 Kachi</b>\n"
-        "👇 <b>ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ</b>"
+        "💎 အများဆုံးလောင်းကြေး — <b>100,000 Kachi</b>\n\n"
+        "👇 <b>အောက်က ခလုတ်နဲ့ ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ</b>"
     )
 
 
@@ -4936,6 +5147,24 @@ user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပ
         await query.answer()
         return
 
+    if data == "menu_ksellcard":
+        bot_info = await context.bot.get_me()
+        ksell_text = f"""💸 <b>Heyy Wanna Sell Card? So Come Dm</b>
+
+ကဒ်ရောင်းလိုပါက Bot ၏ DM (Private Chat) သို့သွားရောက်၍ အောက်ပါပုံစံအတိုင်း ရိုက်ထည့်ပေးပါ -
+👉 `/ksellcard [card_id] [card_id]x[amount]`
+ဥပမာ: `/ksellcard 1296 827x2`"""
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Sell Card 💸", url=f"https://t.me/{bot_info.username}?start=sellcard")],
+            [InlineKeyboardButton("◀️ Back", callback_data="menu_back")]
+        ])
+        try:
+            await query.edit_message_text(ksell_text, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            pass
+        await query.answer()
+        return
+
     if data == "menu_back":
         bot_info = await context.bot.get_me()
         text = f"""👋 မင်္ဂလာပါ {get_mention(user.id, user.first_name)} !
@@ -4952,7 +5181,8 @@ user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပ
                 InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift")
             ],
             [
-                ],
+                InlineKeyboardButton("Sell Card 💸", callback_data="menu_ksellcard")
+            ],
             [
                 InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true")
             ]
@@ -5053,21 +5283,22 @@ user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပ
         if user.id != target_uid:
             return await query.answer("❌ Not for you.", show_alert=True)
         try:
-            member = await context.bot.get_chat_member(chat_id="@beyondpoe", user_id=user.id)
-            if member.status in ['left', 'kicked']:
-                return await query.answer("❌ Please join the channel first.", show_alert=True)
-            else:
-                await query.answer("✅ Thank you! You can now use commands.", show_alert=True)
-                try:
-                    await query.message.edit_text("✅ Verified! You can now use the bot.", parse_mode="HTML")
-                except Exception:
-                    pass
-        except Exception:
-            await query.answer("✅ Verified!", show_alert=True)
+            required_chats = ("@beyondpoe", "@Kachi_sGroup")
+            missing = []
+            for required_chat in required_chats:
+                member = await context.bot.get_chat_member(chat_id=required_chat, user_id=user.id)
+                if member.status in ("left", "kicked"):
+                    missing.append(required_chat)
+            if missing:
+                return await query.answer("❌ Please join both the channel and main group first.", show_alert=True)
+            await query.answer("✅ Thank you! You can now use commands.", show_alert=True)
             try:
-                await query.message.edit_text("✅ Verified!", parse_mode="HTML")
+                await query.message.edit_text("✅ Verified! You can now use the bot.", parse_mode="HTML")
             except Exception:
                 pass
+        except Exception as e:
+            print(f"Force-join callback verification failed for {user.id}: {type(e).__name__}: {e}")
+            await query.answer("⚠️ Could not verify membership. Please try again.", show_alert=True)
         return
 
     if data == "join_card_drop":
@@ -5268,7 +5499,6 @@ def main():
     app.add_handler(CommandHandler("kc", check_kc_cmd))
     app.add_handler(CommandHandler("khmode", khmode_cmd))
     app.add_handler(CommandHandler("resethmode", resethmode_cmd))
-    app.add_handler(CommandHandler("kshop", kshop_cmd))
     app.add_handler(CommandHandler("mm", mm_cmd))
     app.add_handler(CommandHandler("kname", kname_cmd))
     app.add_handler(CommandHandler("kachi", kachi_cmd))
@@ -5279,10 +5509,10 @@ def main():
     app.add_handler(CommandHandler("set", set_card_cmd))
     app.add_handler(CommandHandler("kgift", kgift_cmd))
     app.add_handler(CommandHandler("rngift", rngift_cmd))
+    app.add_handler(CommandHandler("ksellcard", ksellcard_cmd))
     app.add_handler(CommandHandler("card", card_detail_cmd))
     app.add_handler(CommandHandler("ktop", ktop_cmd))
     app.add_handler(CommandHandler("kgtop", kgtop_cmd))
-    app.add_handler(CommandHandler("kg", kg_cmd))
     app.add_handler(CommandHandler("ksearch", ksearch_cmd))
     app.add_handler(CommandHandler("rede", rede_cmd))
 
