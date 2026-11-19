@@ -6,6 +6,7 @@ import re
 import string
 import time
 import datetime
+import html
 import uuid
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
@@ -57,7 +58,7 @@ kslot_cooldowns = {}
 kslot_is_cancelled = {}
 active_kslot_sessions = {}  # Track active/pending kslot sessions per user
 
-global_default_threshold = 80
+global_default_threshold = 60
 bot_warned_groups = set()
 
 # Anti-Spam Tracking Stores
@@ -173,7 +174,7 @@ async def _init_db_once():
                 title TEXT,
                 added_by_id BIGINT,
                 added_by_name TEXT,
-                threshold INT DEFAULT 80,
+                threshold INT DEFAULT 60,
                 msg_count INT DEFAULT 0,
                 admin_warned BOOLEAN DEFAULT FALSE
             );
@@ -237,7 +238,7 @@ async def _init_db_once():
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_kg_win BIGINT DEFAULT 0;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS added_by_id BIGINT;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS added_by_name TEXT;")
-            await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS threshold INT DEFAULT 80;")
+            await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS threshold INT DEFAULT 60;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS msg_count INT DEFAULT 0;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS admin_warned BOOLEAN DEFAULT FALSE;")
             await conn.execute("ALTER TABLE user_cards ADD COLUMN IF NOT EXISTS amount INT DEFAULT 1;")
@@ -1227,9 +1228,8 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
     r_emoji = get_rarity_emoji(card.get('rarity', 'Ten'))
-    caption = (f"{r_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
-               "📯 Fast to Catch 🐌 Use - /mm name\n\n"
-               "Reply /kname to copy 🥞")
+    caption = (f"⚜️ A Kachi Character Has Spawned in❄ The Chat\n\n"
+               "📯 Fast to Catch 🐌 Use - /mm name")
     try:
         if card['type'] == 'photo':
             msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
@@ -1239,7 +1239,17 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
         print(f"Could not send character spawn: {e}")
         return None
     active_card_drops[msg.message_id] = {'chat_id': chat_id, 'card': card, 'winner_id': None,
-        'winner_name': None, 'ended': False, 'expires_at': time.time() + 300}
+        'winner_name': None, 'ended': False, 'name_button_used': False, 'expires_at': time.time() + 180}
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("နာမည်ဖြေရန်", callback_data=f"kdropname_{msg.message_id}")
+            ]])
+        )
+    except Exception as e:
+        print(f"Could not attach spawn name button: {e}")
     asyncio.create_task(run_character_drop_timer(context, msg.message_id))
     return msg
 
@@ -1273,18 +1283,21 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await msg.reply_text("Use: /mm character name", reply_to_message_id=msg.message_id)
     requested = " ".join(context.args).strip().casefold()
-    found = next(((mid, d) for mid, d in list(active_card_drops.items())
-                  if d['chat_id'] == chat.id and time.time() < d['expires_at']), None)
+    found = next(((mid, d) for mid, d in reversed(list(active_card_drops.items()))
+                  if d['chat_id'] == chat.id), None)
     if not found:
         return await msg.reply_text("❄ No active character spawn right now.", reply_to_message_id=msg.message_id)
     drop_id, drop = found
     lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
     async with lock:
-        if drop['ended'] or time.time() >= drop['expires_at']:
-            return await msg.reply_text("⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ပြန်ကောက်နိုင်ပါမယ်။", reply_to_message_id=msg.message_id)
         if drop['winner_id'] is not None:
             winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
-            return await msg.reply_text(f"Sorry Too Late 💔 {winner} He got This Character🧨 try Next Character Spawn ❄", parse_mode='HTML', reply_to_message_id=msg.message_id)
+            return await msg.reply_text(
+                f"Too Late😭 , ရတဲ့name {winner}💥 He got First\nTry Next time ❄",
+                parse_mode='HTML', reply_to_message_id=msg.message_id
+            )
+        if drop['ended'] or time.time() >= drop['expires_at']:
+            return await msg.reply_text("⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ပြန်ကောက်နိုင်ပါမယ်။", reply_to_message_id=msg.message_id)
         card = drop['card']
         if requested != str(card['name']).casefold():
             return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
@@ -1356,7 +1369,7 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    await asyncio.sleep(300)
+    await asyncio.sleep(180)
     drop = active_card_drops.get(msg_id)
     if not drop:
         return
@@ -3080,6 +3093,113 @@ async def check_kc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await render_kc_view(update, context, page=0, owner_id=user.id)
 
 @restricted_command
+async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_force_join(update, context):
+        return
+    user = update.effective_user
+    chat = update.effective_chat
+    await register_user_group(user, chat, context)
+
+    async with db_pool.acquire() as conn:
+        user_row = await conn.fetchrow(
+            """SELECT u.name, u.banned, u.muted_until, u.selected_card_id,
+                      COALESCE(SUM(uc.amount), 0) AS total_cards
+               FROM users u
+               LEFT JOIN user_cards uc ON uc.user_id = u.user_id
+               WHERE u.user_id = $1
+               GROUP BY u.user_id""",
+            user.id
+        )
+        rarity_rows = await conn.fetch(
+            """SELECT c.rarity, COALESCE(SUM(uc.amount), 0) AS amount
+               FROM user_cards uc
+               JOIN cards c ON c.card_id = uc.card_id
+               WHERE uc.user_id = $1
+               GROUP BY c.rarity""",
+            user.id
+        )
+        fav = None
+        if user_row and user_row['selected_card_id']:
+            fav = await conn.fetchrow(
+                "SELECT name FROM cards WHERE card_id = $1",
+                user_row['selected_card_id']
+            )
+        global_rank = await conn.fetchval(
+            """WITH totals AS (
+                   SELECT u.user_id, COALESCE(SUM(uc.amount), 0) AS total
+                   FROM users u LEFT JOIN user_cards uc ON uc.user_id = u.user_id
+                   GROUP BY u.user_id
+               )
+               SELECT COUNT(*) + 1 FROM totals
+               WHERE total > COALESCE((
+                   SELECT SUM(amount) FROM user_cards WHERE user_id = $1
+               ), 0)""",
+            user.id
+        )
+        group_rank = None
+        if chat.type in ("group", "supergroup"):
+            group_rank = await conn.fetchval(
+                """WITH totals AS (
+                       SELECT gm.user_id, COALESCE(SUM(uc.amount), 0) AS total
+                       FROM group_members gm
+                       LEFT JOIN user_cards uc ON uc.user_id = gm.user_id
+                       WHERE gm.chat_id = $1
+                       GROUP BY gm.user_id
+                   )
+                   SELECT COUNT(*) + 1 FROM totals
+                   WHERE total > COALESCE((
+                       SELECT SUM(amount) FROM user_cards WHERE user_id = $2
+                   ), 0)""",
+                chat.id, user.id
+            )
+
+    display_name = html.escape(user_row['name'] if user_row and user_row['name'] else user.first_name)
+    total_cards = user_row['total_cards'] if user_row else 0
+    rarity_counts = {r['rarity']: r['amount'] for r in rarity_rows}
+    rarity_lines = [
+        ("Beyond", "♠", "ʙᴇʏᴏɴᴅ"),
+        ("Birthday Special", "🎀", "ʙʀɪᴛʜᴅᴀʏ"),
+        ("Raiden", "📓", "ʀᴀɪᴅᴇɴ"),
+        ("Kryora", "🦠", "ᴋʀʏᴏʀᴀ"),
+        ("Yugen", "🎐", "ʏᴜɢᴇɴ"),
+        ("Shinsei", "🧬", "sʜɪɴsᴇɪ"),
+        ("Kiwami", "🪞", "ᴋɪᴡᴀᴍɪ"),
+        ("Kami", "✨", "ᴋᴀᴍɪ"),
+        ("Hoshi", "⚜️", "ʜᴏsʜɪ"),
+        ("Ten", "💮", "ᴛᴇɴ"),
+    ]
+    rarity_text = "\\n".join(
+        f"❂ 𝘙𝘢𝘳𝘪𝘵𝘺 {emoji}: {label} - {rarity_counts.get(key, 0)}"
+        for key, emoji, label in rarity_lines
+    )
+    ban_text = "Yes" if user_row and user_row['banned'] else "No"
+    muted = bool(user_row and user_row['muted_until'] and user_row['muted_until'] > int(time.time()))
+    mute_text = "Yes" if muted else "No"
+    fav_text = html.escape(fav['name']) if fav else "None"
+    group_rank_text = str(group_rank) if group_rank is not None else "—"
+    profile = (
+        "❄ 𝗞𝗮𝗰𝗵𝗶 ᴜsᴇʀ 𝚙𝚛𝚘𝚏𝚒𝚕ᴇ\n"
+        "▰▰▰▰▰▰▰▰▰▰▰▰▰\n"
+        f"◉▷ Nᴀᴍᴇ - {display_name}\n"
+        f"◉▷ Iᴅ - <code>{user.id}</code>\n"
+        f"◉▷ Tᴏᴛᴀʟ Kᴀᴄʜɪ Cʜᴀʀᴀᴄᴛᴇʀ - {total_cards}\n"
+        "▰▰▰▰▰▰▰▰▰▰▰▰▰\n\n"
+        "▱▱▱▱▱▱▱▱▱▱▱▱▱\n"
+        f"{rarity_text}\n"
+        "▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
+        f"🚫◧Bᴀɴ - {ban_text}\n"
+        f"⭕◨Mᴜᴛᴇ - {mute_text}\n\n"
+        f"❀ Fᴀᴠ Cᴀʀᴅ - {fav_text}\n\n"
+        f"✪[ 𝗚𝗹𝗼𝗯𝗮𝗹 𝗧𝗼𝗽 ( {global_rank} ) ]❄\n"
+        f"✪[𝗚𝗿𝗼𝘂𝗽 𝗧𝗼𝗽 ( {group_rank_text} )]❄"
+    )
+    await update.effective_message.reply_text(
+        profile, parse_mode="HTML",
+        reply_to_message_id=update.effective_message.message_id
+    )
+
+
+@restricted_command
 async def kachi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_force_join(update, context):
         return
@@ -3997,11 +4117,11 @@ Status: Successful ✅
                         ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, groups.title)
                     """, chat_id, chat.title or "Group")
                     
-                    threshold = 90
+                    threshold = 60
 
                     row = await conn.fetchrow("""
                         UPDATE groups 
-                        SET threshold = 90,
+                        SET threshold = 60,
                             msg_count = CASE WHEN msg_count + 1 >= $2 THEN 0 ELSE msg_count + 1 END
                         WHERE chat_id = $1
                         RETURNING msg_count, (msg_count = 0) AS should_drop
@@ -4450,6 +4570,51 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     asyncio.create_task(register_user_group(user, query.message.chat, context))
+
+    if data.startswith("kdropname_"):
+        try:
+            drop_id = int(data.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return await query.answer("ဒီကဒ်ကို မတွေ့တော့ပါ။", show_alert=True)
+
+        drop = active_card_drops.get(drop_id)
+        if not drop or drop["chat_id"] != chat_id:
+            return await query.answer("⏰ အချိန်ပြည့်သွားပါပြီ။", show_alert=True)
+
+        lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
+        async with lock:
+            if drop["winner_id"] is not None:
+                winner = get_mention(drop["winner_id"], drop["winner_name"] or "Winner")
+                return await query.answer(
+                    f"Too Late😭 {drop['winner_name'] or 'Winner'} He got First",
+                    show_alert=True
+                )
+            if drop["ended"] or time.time() >= drop["expires_at"]:
+                return await query.answer("⏰ အချိန်ပြည့်သွားပါပြီ။", show_alert=True)
+            if drop.get("name_button_used"):
+                return await query.answer("နာမည်တောင်းပြီးပါပြီ။", show_alert=True)
+            drop["name_button_used"] = True
+
+            claim_command = f"/mm {drop['card']['name']}"
+            copy_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "📋 Copy Name",
+                    copy_text=CopyTextButton(text=claim_command)
+                )
+            ]])
+            await query.answer("နာမည်ကို ပို့ပေးလိုက်ပါပြီ။")
+            try:
+                await context.bot.send_message(
+                    chat_id,
+                    f"Use This - <code>{claim_command}</code>",
+                    parse_mode="HTML",
+                    reply_markup=copy_markup,
+                    reply_to_message_id=drop_id
+                )
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception as e:
+                print(f"Could not send spawned card name: {e}")
+        return
 
     if data.startswith("kslot_bet_"):
         parts = data.split("_")
@@ -5299,6 +5464,7 @@ def main():
     app.add_handler(CommandHandler("resethmode", resethmode_cmd))
     app.add_handler(CommandHandler("mm", mm_cmd))
     app.add_handler(CommandHandler("kname", kname_cmd))
+    app.add_handler(CommandHandler("kprofile", kprofile_cmd))
     app.add_handler(CommandHandler("kachi", kachi_cmd))
     app.add_handler(CommandHandler("myre", myre_cmd))
     app.add_handler(CommandHandler("kslot", kslot_cmd))  
