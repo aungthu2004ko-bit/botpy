@@ -988,14 +988,23 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     bot_info = await context.bot.get_me()
-    text = f"""👋 မင်္ဂလာပါ {get_mention(user.id, user.first_name)} !
+    text = f"""👋 Hello {get_mention(user.id, user.first_name)}!
 
-🌺 Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏 မှ ကြိုဆိုပါတယ်!
+🌺 Welcome to Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏!
 
-📌 <b>အသုံးပြုပုံ ညွှန်ကြားချက်များ -</b>
+📌 <b>How to Use / အသုံးပြုနည်း</b>
+
+<b>မြန်မာ</b>
 - Bot ကို Group ထဲသို့ ထည့်ပါ။
-- Group ထဲတွင် စာပေးပို့ပါ (သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက ကတ်များ အလိုအလျောက် ကျလာပါမည်)။
-- ဦးဆောင်သူစာရင်းများကို ကြည့်ရန် /ktop ကို အသုံးပြုပါ။"""
+- Group ထဲတွင် စာများပေးပို့ပါ။ သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက Character Card အလိုအလျောက် ကျလာပါမည်။
+- ကတ်ကျလာပါက အောက်ရှိ <b>နာမည်ဖြေရန်</b> ကိုနှိပ်ပြီး Character Name ကို ဖြည့်သွင်းပါ။
+- Leaderboard ကြည့်ရန် /ktop ကို အသုံးပြုပါ။
+
+<b>English</b>
+- Add the bot to your group.
+- Send messages in the group. A Character Card will drop automatically when the message limit is reached.
+- When a card drops, tap <b>နာမည်ဖြေရန်</b> and enter the character name.
+- Use /ktop to view the leaderboard."""
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -1293,11 +1302,11 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if drop['winner_id'] is not None:
             winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
             return await msg.reply_text(
-                f"Too Late😭 , ရတဲ့name {winner}💥 He got First\nTry Next time ❄",
+                f"Too Late 😭 {winner} got it first. Try next time ❄",
                 parse_mode='HTML', reply_to_message_id=msg.message_id
             )
         if drop['ended'] or time.time() >= drop['expires_at']:
-            return await msg.reply_text("⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ပြန်ကောက်နိုင်ပါမယ်။", reply_to_message_id=msg.message_id)
+            return await msg.reply_text("⏰ Time is up. Please try again when the next card drops.", reply_to_message_id=msg.message_id)
         card = drop['card']
         if requested != str(card['name']).casefold():
             return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
@@ -1357,7 +1366,7 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await msg.reply_text('Reply to an active spawned card with /kname.', reply_to_message_id=msg.message_id)
     drop = active_card_drops[replied.message_id]
     if drop['ended'] or time.time() >= drop['expires_at']:
-        return await msg.reply_text('⏰ အချိန်ပြည့်သွားပါပြီ။ နောက်ကဒ်ကျမှ ကောက်လို့မရတော့ပါ။', reply_to_message_id=msg.message_id)
+        return await msg.reply_text('⏰ Time is up. Please try again when the next card drops.', reply_to_message_id=msg.message_id)
     claim_command = f"/mm {drop['card']['name']}"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command))
@@ -3093,113 +3102,6 @@ async def check_kc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await render_kc_view(update, context, page=0, owner_id=user.id)
 
 @restricted_command
-async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_force_join(update, context):
-        return
-    user = update.effective_user
-    chat = update.effective_chat
-    await register_user_group(user, chat, context)
-
-    async with db_pool.acquire() as conn:
-        user_row = await conn.fetchrow(
-            """SELECT u.name, u.banned, u.muted_until, u.selected_card_id,
-                      COALESCE(SUM(uc.amount), 0) AS total_cards
-               FROM users u
-               LEFT JOIN user_cards uc ON uc.user_id = u.user_id
-               WHERE u.user_id = $1
-               GROUP BY u.user_id""",
-            user.id
-        )
-        rarity_rows = await conn.fetch(
-            """SELECT c.rarity, COALESCE(SUM(uc.amount), 0) AS amount
-               FROM user_cards uc
-               JOIN cards c ON c.card_id = uc.card_id
-               WHERE uc.user_id = $1
-               GROUP BY c.rarity""",
-            user.id
-        )
-        fav = None
-        if user_row and user_row['selected_card_id']:
-            fav = await conn.fetchrow(
-                "SELECT name FROM cards WHERE card_id = $1",
-                user_row['selected_card_id']
-            )
-        global_rank = await conn.fetchval(
-            """WITH totals AS (
-                   SELECT u.user_id, COALESCE(SUM(uc.amount), 0) AS total
-                   FROM users u LEFT JOIN user_cards uc ON uc.user_id = u.user_id
-                   GROUP BY u.user_id
-               )
-               SELECT COUNT(*) + 1 FROM totals
-               WHERE total > COALESCE((
-                   SELECT SUM(amount) FROM user_cards WHERE user_id = $1
-               ), 0)""",
-            user.id
-        )
-        group_rank = None
-        if chat.type in ("group", "supergroup"):
-            group_rank = await conn.fetchval(
-                """WITH totals AS (
-                       SELECT gm.user_id, COALESCE(SUM(uc.amount), 0) AS total
-                       FROM group_members gm
-                       LEFT JOIN user_cards uc ON uc.user_id = gm.user_id
-                       WHERE gm.chat_id = $1
-                       GROUP BY gm.user_id
-                   )
-                   SELECT COUNT(*) + 1 FROM totals
-                   WHERE total > COALESCE((
-                       SELECT SUM(amount) FROM user_cards WHERE user_id = $2
-                   ), 0)""",
-                chat.id, user.id
-            )
-
-    display_name = html.escape(user_row['name'] if user_row and user_row['name'] else user.first_name)
-    total_cards = user_row['total_cards'] if user_row else 0
-    rarity_counts = {r['rarity']: r['amount'] for r in rarity_rows}
-    rarity_lines = [
-        ("Beyond", "♠", "ʙᴇʏᴏɴᴅ"),
-        ("Birthday Special", "🎀", "ʙʀɪᴛʜᴅᴀʏ"),
-        ("Raiden", "📓", "ʀᴀɪᴅᴇɴ"),
-        ("Kryora", "🦠", "ᴋʀʏᴏʀᴀ"),
-        ("Yugen", "🎐", "ʏᴜɢᴇɴ"),
-        ("Shinsei", "🧬", "sʜɪɴsᴇɪ"),
-        ("Kiwami", "🪞", "ᴋɪᴡᴀᴍɪ"),
-        ("Kami", "✨", "ᴋᴀᴍɪ"),
-        ("Hoshi", "⚜️", "ʜᴏsʜɪ"),
-        ("Ten", "💮", "ᴛᴇɴ"),
-    ]
-    rarity_text = "\\n".join(
-        f"❂ 𝘙𝘢𝘳𝘪𝘵𝘺 {emoji}: {label} - {rarity_counts.get(key, 0)}"
-        for key, emoji, label in rarity_lines
-    )
-    ban_text = "Yes" if user_row and user_row['banned'] else "No"
-    muted = bool(user_row and user_row['muted_until'] and user_row['muted_until'] > int(time.time()))
-    mute_text = "Yes" if muted else "No"
-    fav_text = html.escape(fav['name']) if fav else "None"
-    group_rank_text = str(group_rank) if group_rank is not None else "—"
-    profile = (
-        "❄ 𝗞𝗮𝗰𝗵𝗶 ᴜsᴇʀ 𝚙𝚛𝚘𝚏𝚒𝚕ᴇ\n"
-        "▰▰▰▰▰▰▰▰▰▰▰▰▰\n"
-        f"◉▷ Nᴀᴍᴇ - {display_name}\n"
-        f"◉▷ Iᴅ - <code>{user.id}</code>\n"
-        f"◉▷ Tᴏᴛᴀʟ Kᴀᴄʜɪ Cʜᴀʀᴀᴄᴛᴇʀ - {total_cards}\n"
-        "▰▰▰▰▰▰▰▰▰▰▰▰▰\n\n"
-        "▱▱▱▱▱▱▱▱▱▱▱▱▱\n"
-        f"{rarity_text}\n"
-        "▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
-        f"🚫◧Bᴀɴ - {ban_text}\n"
-        f"⭕◨Mᴜᴛᴇ - {mute_text}\n\n"
-        f"❀ Fᴀᴠ Cᴀʀᴅ - {fav_text}\n\n"
-        f"✪[ 𝗚𝗹𝗼𝗯𝗮𝗹 𝗧𝗼𝗽 ( {global_rank} ) ]❄\n"
-        f"✪[𝗚𝗿𝗼𝘂𝗽 𝗧𝗼𝗽 ( {group_rank_text} )]❄"
-    )
-    await update.effective_message.reply_text(
-        profile, parse_mode="HTML",
-        reply_to_message_id=update.effective_message.message_id
-    )
-
-
-@restricted_command
 async def kachi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_force_join(update, context):
         return
@@ -4575,24 +4477,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             drop_id = int(data.split("_", 1)[1])
         except (ValueError, IndexError):
-            return await query.answer("ဒီကဒ်ကို မတွေ့တော့ပါ။", show_alert=True)
+            return await query.answer("This card is no longer available.", show_alert=True)
 
         drop = active_card_drops.get(drop_id)
         if not drop or drop["chat_id"] != chat_id:
-            return await query.answer("⏰ အချိန်ပြည့်သွားပါပြီ။", show_alert=True)
+            return await query.answer("⏰ Time is up. Please wait for the next card.", show_alert=True)
 
         lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
         async with lock:
             if drop["winner_id"] is not None:
                 winner = get_mention(drop["winner_id"], drop["winner_name"] or "Winner")
                 return await query.answer(
-                    f"Too Late😭 {drop['winner_name'] or 'Winner'} He got First",
+                    f"Too Late 😭 {drop['winner_name'] or 'Winner'} got it first. Try next time.",
                     show_alert=True
                 )
             if drop["ended"] or time.time() >= drop["expires_at"]:
-                return await query.answer("⏰ အချိန်ပြည့်သွားပါပြီ။", show_alert=True)
+                return await query.answer("⏰ Time is up. Please wait for the next card.", show_alert=True)
             if drop.get("name_button_used"):
-                return await query.answer("နာမည်တောင်းပြီးပါပြီ။", show_alert=True)
+                return await query.answer("The character name has already been requested.", show_alert=True)
             drop["name_button_used"] = True
 
             claim_command = f"/mm {drop['card']['name']}"
@@ -4602,7 +4504,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     copy_text=CopyTextButton(text=claim_command)
                 )
             ]])
-            await query.answer("နာမည်ကို ပို့ပေးလိုက်ပါပြီ။")
+            await query.answer("The character name has been sent.")
             try:
                 await context.bot.send_message(
                     chat_id,
@@ -5103,13 +5005,13 @@ CHECK /kc Use Kachi"""
         return
 
     if data == "menu_help":
-        help_text = """📖 <b>အကူအညီနှင့် လမ်းညွှန်ချက်များ (Help & Guidelines)</b>
+        help_text = """📖 <b>Help & Guidelines</b>
 
-- Bot ကို Group ထဲသို့ထည့်ပြီး စာပေးပို့ပါက သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်သည်နှင့် ကတ်များ အလိုအလျောက်ကျလာမည်ဖြစ်ပါသည်။
-- /ktop - Global Leaderboard ကို ကြည့်ရန်။
-- /kgtop - Group Leaderboard ကို ကြည့်ရန်။
-- /card [card_id] - ကတ်အသေးစိတ်နှင့် ပိုင်ရှင်များကို ကြည့်ရန်။
-- /set [card_id] - /kc တွင်ပြသရန် ပရိုဖိုင်ကတ်အဖြစ် သတ်မှတ်ရန်။"""
+- Add the bot to your group and send messages. Character Cards will drop automatically when the message limit is reached.
+- /ktop - View the Global Leaderboard.
+- /kgtop - View the Group Leaderboard.
+- /card [card_id] - View card details and owners.
+- /set [card_id] - Set your profile card for /kc."""
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back")]])
         try:
             await query.edit_message_text(help_text, parse_mode="HTML", reply_markup=markup)
@@ -5119,10 +5021,10 @@ CHECK /kc Use Kachi"""
         return
 
     if data == "menu_kgift":
-        kgift_text = """🎁 <b>လက်ဆောင်ပေးခြင်း (Gift) လမ်းညွှန်ချက်များ</b>
+        kgift_text = """🎁 <b>Gift Guidelines</b>
 
-user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပါအတိုင်း ပေးပို့ပါ -
-- /kgift [card_id] - သတ်မှတ်ထားသော ကတ်တစ်ခု ပေးပို့ရန် (ဥပမာ - /kgift 1201)"""
+Reply to a user's message and use:
+- /kgift [card_id] - Send the specified card (Example: /kgift 1201)."""
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back")]])
         try:
             await query.edit_message_text(kgift_text, parse_mode="HTML", reply_markup=markup)
@@ -5133,14 +5035,15 @@ user တစ်ဦး၏ စာကို reply လုပ်၍ အောက်ပ
 
     if data == "menu_back":
         bot_info = await context.bot.get_me()
-        text = f"""👋 မင်္ဂလာပါ {get_mention(user.id, user.first_name)} !
+        text = f"""👋 Hello {get_mention(user.id, user.first_name)}!
 
-🌺 Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏 မှ ကြိုဆိုပါတယ်!
+🌺 Welcome to Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏!
 
-📌 <b>အသုံးပြုပုံ ညွှန်ကြားချက်များ -</b>
-- Bot ကို Group ထဲသို့ ထည့်ပါ။
-- Group ထဲတွင် စာပေးပို့ပါ (သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက ကတ်များ အလိုအလျောက် ကျလာပါမည်)။
-- ဦးဆောင်သူစာရင်းများကို ကြည့်ရန် /ktop ကို အသုံးပြုပါ။"""
+📌 <b>How to Use</b>
+- Add the bot to your group.
+- Send messages in the group. Character Cards will drop automatically when the message limit is reached.
+- When a card drops, tap <b>နာမည်ဖြေရန်</b> and enter the character name.
+- Use /ktop to view the leaderboard."""
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("Help 📖", callback_data="menu_help"),
@@ -5464,7 +5367,6 @@ def main():
     app.add_handler(CommandHandler("resethmode", resethmode_cmd))
     app.add_handler(CommandHandler("mm", mm_cmd))
     app.add_handler(CommandHandler("kname", kname_cmd))
-    app.add_handler(CommandHandler("kprofile", kprofile_cmd))
     app.add_handler(CommandHandler("kachi", kachi_cmd))
     app.add_handler(CommandHandler("myre", myre_cmd))
     app.add_handler(CommandHandler("kslot", kslot_cmd))  
