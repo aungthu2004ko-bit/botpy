@@ -58,7 +58,7 @@ kslot_cooldowns = {}
 kslot_is_cancelled = {}
 active_kslot_sessions = {}  # Track active/pending kslot sessions per user
 
-global_default_threshold = 60
+global_default_threshold = 70
 bot_warned_groups = set()
 
 # Anti-Spam Tracking Stores
@@ -174,7 +174,7 @@ async def _init_db_once():
                 title TEXT,
                 added_by_id BIGINT,
                 added_by_name TEXT,
-                threshold INT DEFAULT 60,
+                threshold INT DEFAULT 70,
                 msg_count INT DEFAULT 0,
                 admin_warned BOOLEAN DEFAULT FALSE
             );
@@ -238,7 +238,7 @@ async def _init_db_once():
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_kg_win BIGINT DEFAULT 0;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS added_by_id BIGINT;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS added_by_name TEXT;")
-            await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS threshold INT DEFAULT 60;")
+            await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS threshold INT DEFAULT 70;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS msg_count INT DEFAULT 0;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS admin_warned BOOLEAN DEFAULT FALSE;")
             await conn.execute("ALTER TABLE user_cards ADD COLUMN IF NOT EXISTS amount INT DEFAULT 1;")
@@ -1236,8 +1236,9 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
-    r_emoji = get_rarity_emoji(card.get('rarity', 'Ten'))
+    rarity = get_rarity_display(card.get('rarity') or 'Ten')
     caption = (f"⚜️ A Kachi Character Has Spawned in❄ The Chat\n\n"
+               f"🌟 Rarity - {rarity}\n\n"
                "📯 Fast to Catch 🐌 Use - /mm name")
     try:
         if card['type'] == 'photo':
@@ -1886,6 +1887,151 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 @restricted_command
+async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the caller's Kachi profile in the bot DM, matching the profile layout."""
+    user = update.effective_user
+    msg = update.effective_message
+    chat = update.effective_chat
+    if not user or not msg:
+        return
+
+    # Show the profile in the chat where /kprofile was invoked (private or group).
+    try:
+        await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+    except Exception:
+        pass
+
+    rarity_order = [
+        ("Beyond", "♠", "BEYOND"),
+        ("Birthday Special", "🎀", "BIRTHDAY"),
+        ("Raiden", "📓", "RAIDEN"),
+        ("Kryora", "🦠", "KRYORA"),
+        ("Yugen", "🎐", "YUGEN"),
+        ("Shinsei", "🧬", "SHINSEI"),
+        ("Kiwami", "🪞", "KIWAMI"),
+        ("Kami", "✨", "KAMI"),
+        ("Hoshi", "⚜️", "HOSHI"),
+        ("Ten", "💮", "TEN"),
+    ]
+
+    async with db_pool.acquire() as conn:
+        user_row = await conn.fetchrow(
+            "SELECT name, coins, selected_card_id, banned, muted_until FROM users WHERE user_id = $1",
+            user.id
+        )
+        if not user_row:
+            await conn.execute(
+                "INSERT INTO users (user_id, name, coins) VALUES ($1, $2, 1000) ON CONFLICT (user_id) DO NOTHING",
+                user.id, user.first_name or "User"
+            )
+            user_row = await conn.fetchrow(
+                "SELECT name, coins, selected_card_id, banned, muted_until FROM users WHERE user_id = $1",
+                user.id
+            )
+
+        rarity_rows = await conn.fetch("""
+            SELECT c.rarity, COALESCE(SUM(uc.amount), 0) AS amount
+            FROM user_cards uc
+            JOIN cards c ON c.card_id = uc.card_id
+            WHERE uc.user_id = $1
+            GROUP BY c.rarity
+        """, user.id)
+        rarity_counts = {row['rarity'] or 'Ten': int(row['amount'] or 0) for row in rarity_rows}
+        total_cards = sum(rarity_counts.values())
+
+        global_rank = await conn.fetchval("""
+            SELECT COUNT(*) + 1 FROM (
+                SELECT u.user_id, COALESCE(SUM(uc.amount), 0) AS total_cards
+                FROM users u LEFT JOIN user_cards uc ON u.user_id = uc.user_id
+                GROUP BY u.user_id
+            ) ranked
+            WHERE ranked.total_cards > (
+                SELECT COALESCE(SUM(amount), 0) FROM user_cards WHERE user_id = $1
+            )
+        """, user.id)
+
+        group_rank = None
+        if chat and chat.type in ("group", "supergroup"):
+            group_rank = await conn.fetchval("""
+                SELECT COUNT(*) + 1 FROM (
+                    SELECT gm.user_id, COALESCE(SUM(uc.amount), 0) AS total_cards
+                    FROM group_members gm
+                    LEFT JOIN user_cards uc ON uc.user_id = gm.user_id
+                    WHERE gm.chat_id = $1
+                    GROUP BY gm.user_id
+                ) ranked
+                WHERE ranked.total_cards > COALESCE((
+                    SELECT SUM(uc.amount)
+                    FROM group_members gm2
+                    LEFT JOIN user_cards uc ON uc.user_id = gm2.user_id
+                    WHERE gm2.chat_id = $1 AND gm2.user_id = $2
+                    GROUP BY gm2.user_id
+                ), 0)
+            """, chat.id, user.id)
+
+        fav_card = None
+        selected_id = user_row['selected_card_id'] if user_row else None
+        if selected_id:
+            fav_card = await conn.fetchrow(
+                "SELECT name FROM cards WHERE card_id = $1", selected_id
+            )
+        if not fav_card:
+            fav_card = await conn.fetchrow("""
+                SELECT c.name
+                FROM user_cards uc JOIN cards c ON c.card_id = uc.card_id
+                WHERE uc.user_id = $1
+                ORDER BY uc.amount DESC, c.card_id ASC LIMIT 1
+            """, user.id)
+
+    display_name = user.first_name or (user_row['name'] if user_row else None) or "User"
+    name_line = get_mention(user.id, display_name)
+    ban_status = "Yes" if user_row and user_row['banned'] else "No"
+    muted_until = int(user_row['muted_until'] or 0) if user_row else 0
+    mute_status = "Yes" if muted_until > int(time.time()) else "No"
+
+    lines = [
+        "❄️ <b>Kachi USER profile</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"◉▷ <b>Name</b> - {name_line}",
+        f"◉▷ <b>ID</b> - <code>{user.id}</code>",
+        f"◉▷ <b>Total Kachi Character</b> - <b>{total_cards}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    for rarity, emoji, label in rarity_order:
+        lines.append(f"❂ <i>Rarity</i> {emoji} : <b>{label}</b> - <b>{rarity_counts.get(rarity, 0)}</b>")
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━",
+        "",
+        f"🚫 <b>Ban</b> - {ban_status}",
+        f"⭕ <b>Mute</b> - {mute_status}",
+        "",
+        f"❀ <b>Fav Card</b> - {html.escape(fav_card['name']) if fav_card else '—'}",
+        "",
+        f"✪ <b>Global Top ( )</b> #{global_rank or 1} ❄️",
+        f"✪ <b>Group Top ( )</b> #{group_rank if group_rank is not None else '—'} ❄️",
+    ])
+    profile_text = "<blockquote>" + "\n".join(lines) + "</blockquote>"
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=profile_text,
+            parse_mode="HTML",
+            reply_to_message_id=msg.message_id
+        )
+    except Exception as e:
+        print(f"Could not send /kprofile in chat {chat.id} for {user.id}: {type(e).__name__}: {e}")
+        try:
+            await msg.reply_text(
+                "❌ I couldn't post your profile here. Please check that the bot has permission to send messages.",
+                reply_to_message_id=msg.message_id
+            )
+        except Exception:
+            pass
+
+
+@restricted_command
 async def check_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg = update.message
@@ -1982,13 +2128,13 @@ async def crest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     global global_default_threshold
     group_threshold.clear()
-    global_default_threshold = 80
+    global_default_threshold = 70
 
     async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE groups SET threshold = 80, msg_count = 0")
+        await conn.execute("UPDATE groups SET threshold = 70, msg_count = 0")
         await conn.execute("DELETE FROM settings WHERE key = 'default_threshold'")
 
-    await update.message.reply_text("✅ All group thresholds and message counts have been reset to default (80). Card drops will only trigger when new message thresholds are met.", parse_mode="HTML", reply_to_message_id=msg_id)
+    await update.message.reply_text("✅ All group thresholds and message counts have been reset to default (70). Card drops will only trigger when new message thresholds are met.", parse_mode="HTML", reply_to_message_id=msg_id)
 
 @restricted_command
 async def ktop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4019,11 +4165,11 @@ Status: Successful ✅
                         ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, groups.title)
                     """, chat_id, chat.title or "Group")
                     
-                    threshold = 60
+                    threshold = 70
 
                     row = await conn.fetchrow("""
                         UPDATE groups 
-                        SET threshold = 60,
+                        SET threshold = 70,
                             msg_count = CASE WHEN msg_count + 1 >= $2 THEN 0 ELSE msg_count + 1 END
                         WHERE chat_id = $1
                         RETURNING msg_count, (msg_count = 0) AS should_drop
@@ -5363,6 +5509,7 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("pre", pre_cmd))
     app.add_handler(CommandHandler("kc", check_kc_cmd))
+    app.add_handler(CommandHandler("kprofile", kprofile_cmd))
     app.add_handler(CommandHandler("khmode", khmode_cmd))
     app.add_handler(CommandHandler("resethmode", resethmode_cmd))
     app.add_handler(CommandHandler("mm", mm_cmd))
