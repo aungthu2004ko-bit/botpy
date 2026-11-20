@@ -1236,9 +1236,8 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
-    rarity = get_rarity_display(card.get('rarity') or 'Ten')
-    caption = (f"⚜️ A Kachi Character Has Spawned in❄ The Chat\n\n"
-               f"🌟 Rarity - {rarity}\n\n"
+    rarity_emoji = get_rarity_emoji(card.get('rarity') or 'Ten')
+    caption = (f"{rarity_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
                "📯 Fast to Catch 🐌 Use - /mm name")
     try:
         if card['type'] == 'photo':
@@ -1895,9 +1894,9 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not msg:
         return
 
-    # Show the profile in the chat where /kprofile was invoked (private or group).
+    # The command is intended to deliver the profile privately.
     try:
-        await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+        await context.bot.send_chat_action(chat_id=user.id, action="typing")
     except Exception:
         pass
 
@@ -1973,11 +1972,11 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected_id = user_row['selected_card_id'] if user_row else None
         if selected_id:
             fav_card = await conn.fetchrow(
-                "SELECT name FROM cards WHERE card_id = $1", selected_id
+                "SELECT card_id, name FROM cards WHERE card_id = $1", selected_id
             )
         if not fav_card:
             fav_card = await conn.fetchrow("""
-                SELECT c.name
+                SELECT c.card_id, c.name
                 FROM user_cards uc JOIN cards c ON c.card_id = uc.card_id
                 WHERE uc.user_id = $1
                 ORDER BY uc.amount DESC, c.card_id ASC LIMIT 1
@@ -2006,7 +2005,7 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🚫 <b>Ban</b> - {ban_status}",
         f"⭕ <b>Mute</b> - {mute_status}",
         "",
-        f"❀ <b>Fav Card</b> - {html.escape(fav_card['name']) if fav_card else '—'}",
+        f"❀ <b>Fav Card</b> - {html.escape(fav_card['name']) + f" (ID: {html.escape(str(fav_card['card_id']))})" if fav_card else '—'}",
         "",
         f"✪ <b>Global Top ( )</b> #{global_rank or 1} ❄️",
         f"✪ <b>Group Top ( )</b> #{group_rank if group_rank is not None else '—'} ❄️",
@@ -2014,21 +2013,15 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile_text = "<blockquote>" + "\n".join(lines) + "</blockquote>"
 
     try:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=profile_text,
-            parse_mode="HTML",
+        await context.bot.send_message(user.id, profile_text, parse_mode="HTML")
+        if chat and chat.type in ("group", "supergroup"):
+            await msg.reply_text("❄️ Your profile has been sent to your DM.", reply_to_message_id=msg.message_id)
+    except Exception as e:
+        print(f"Could not send /kprofile DM for {user.id}: {type(e).__name__}: {e}")
+        await msg.reply_text(
+            "❌ Please start the bot in private chat first, then use /kprofile again.",
             reply_to_message_id=msg.message_id
         )
-    except Exception as e:
-        print(f"Could not send /kprofile in chat {chat.id} for {user.id}: {type(e).__name__}: {e}")
-        try:
-            await msg.reply_text(
-                "❌ I couldn't post your profile here. Please check that the bot has permission to send messages.",
-                reply_to_message_id=msg.message_id
-            )
-        except Exception:
-            pass
 
 
 @restricted_command
