@@ -8,6 +8,12 @@ import time
 import datetime
 import html
 import uuid
+import io
+
+try:
+    from PIL import Image, ImageDraw, ImageOps
+except ImportError:
+    Image = ImageDraw = ImageOps = None
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
 from telegram.error import TelegramError, NetworkError, TimedOut
@@ -51,6 +57,73 @@ pending_kachi_transfers = {}
 pending_card_buys = {}
 active_kbox_users = set()  # Track ongoing Kbox sessions per user
 kshop_prices = {}  # Track shop card prices per user session
+
+
+# Subtle dark occult / esoteric line-art visual treatment for profile, inventory,
+# and shop media. Original card artwork is kept intact inside the decorative frame.
+_OCCULT_BG = (8, 10, 18)
+_OCCULT_GOLD = (150, 126, 83)
+
+def _make_occult_canvas(width=1000, height=1000):
+    if Image is None:
+        return None
+    image = Image.new("RGB", (width, height), _OCCULT_BG)
+    draw = ImageDraw.Draw(image, "RGBA")
+    for y in range(28, height, 34):
+        for x in range(28, width, 34):
+            draw.ellipse((x, y, x + 2, y + 2), fill=(190, 174, 137, 42))
+    for inset, alpha in ((34, 105), (45, 65), (62, 45)):
+        draw.rectangle((inset, inset, width-inset, height-inset), outline=(*_OCCULT_GOLD, alpha), width=2)
+    cx, cy = width // 2, height // 2
+    radius = min(width, height) // 2 - 95
+    draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), outline=(*_OCCULT_GOLD, 38), width=2)
+    draw.ellipse((cx-radius+24, cy-radius+24, cx+radius-24, cy+radius-24), outline=(*_OCCULT_GOLD, 28), width=1)
+    import math
+    pts = []
+    for i in range(16):
+        angle = -math.pi / 2 + i * math.pi / 8
+        r = radius * (0.72 if i % 2 == 0 else 0.29)
+        pts.append((cx + math.cos(angle)*r, cy + math.sin(angle)*r))
+    draw.line(pts + [pts[0]], fill=(*_OCCULT_GOLD, 32), width=2)
+    arm = 48
+    for x, y, sx, sy in ((55,55,1,1),(width-55,55,-1,1),(55,height-55,1,-1),(width-55,height-55,-1,-1)):
+        draw.line((x,y,x+sx*arm,y), fill=(*_OCCULT_GOLD,150), width=2)
+        draw.line((x,y,x,y+sy*arm), fill=(*_OCCULT_GOLD,150), width=2)
+    return image
+
+def make_occult_background():
+    canvas = _make_occult_canvas()
+    if canvas is None:
+        return None
+    output = io.BytesIO()
+    canvas.save(output, format="PNG", optimize=True)
+    output.seek(0)
+    output.name = "kachi_profile_bg.png"
+    return output
+
+async def make_occult_card_frame(context, file_id):
+    if Image is None:
+        return None
+    try:
+        tg_file = await context.bot.get_file(file_id)
+        raw = await tg_file.download_as_bytearray()
+        source = Image.open(io.BytesIO(raw)).convert("RGB")
+        canvas = _make_occult_canvas()
+        fitted = ImageOps.contain(source, (850, 850), method=Image.Resampling.LANCZOS)
+        x, y = (canvas.width-fitted.width)//2, (canvas.height-fitted.height)//2
+        draw = ImageDraw.Draw(canvas, "RGBA")
+        pad = 12
+        draw.rectangle((x-pad-5,y-pad-5,x+fitted.width+pad+5,y+fitted.height+pad+5), fill=(3,4,9,255), outline=(*_OCCULT_GOLD,190), width=3)
+        draw.rectangle((x-pad,y-pad,x+fitted.width+pad,y+fitted.height+pad), outline=(*_OCCULT_GOLD,100), width=1)
+        canvas.paste(fitted, (x,y))
+        output = io.BytesIO()
+        canvas.save(output, format="JPEG", quality=94, optimize=True)
+        output.seek(0)
+        output.name = "kachi_occult_card.jpg"
+        return output
+    except Exception as exc:
+        print(f"Occult card frame generation skipped: {type(exc).__name__}: {exc}")
+        return None
 
 # Cooldown Stores for /kbox, and /kslot
 kbox_cooldowns = {}
@@ -2013,12 +2086,13 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile_text = "<blockquote>" + "\n".join(lines) + "</blockquote>"
 
     try:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=profile_text,
-            parse_mode="HTML",
-            reply_to_message_id=msg.message_id
-        )
+        profile_bg = make_occult_background()
+        if profile_bg is not None:
+            await context.bot.send_photo(chat_id=chat.id, photo=profile_bg, caption=profile_text,
+                                         parse_mode="HTML", reply_to_message_id=msg.message_id)
+        else:
+            await context.bot.send_message(chat_id=chat.id, text=profile_text, parse_mode="HTML",
+                                           reply_to_message_id=msg.message_id)
     except Exception as e:
         print(f"Could not send /kprofile in chat {chat.id} for {user.id}: {type(e).__name__}: {e}")
         try:
@@ -2949,7 +3023,11 @@ async def render_kshop_card(query, context, user_id, rarity, index):
     ])
     markup = InlineKeyboardMarkup(keyboard_rows)
 
-    media = InputMediaPhoto(media=card['file_id'], caption=caption_text, parse_mode="HTML") if card['type'] == 'photo' else InputMediaVideo(media=card['file_id'], caption=caption_text, parse_mode="HTML")
+    if card['type'] == 'photo':
+        framed_photo = await make_occult_card_frame(context, card['file_id'])
+        media = InputMediaPhoto(media=framed_photo or card['file_id'], caption=caption_text, parse_mode="HTML")
+    else:
+        media = InputMediaVideo(media=card['file_id'], caption=caption_text, parse_mode="HTML")
 
     try:
         await query.edit_message_media(media=media, reply_markup=markup)
@@ -3222,7 +3300,8 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     if isinstance(update_or_query, Update):
         try:
             if active_card['type'] == 'photo':
-                await update_or_query.message.reply_photo(photo=active_card['file_id'], caption=full_text, parse_mode="HTML", reply_markup=markup, reply_to_message_id=msg_id)
+                framed_photo = await make_occult_card_frame(context, active_card['file_id'])
+                await update_or_query.message.reply_photo(photo=framed_photo or active_card['file_id'], caption=full_text, parse_mode="HTML", reply_markup=markup, reply_to_message_id=msg_id)
             else:
                 await update_or_query.message.reply_video(video=active_card['file_id'], caption=full_text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -3230,7 +3309,14 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     else:
         query = update_or_query
         try:
-            await query.edit_message_caption(caption=full_text, parse_mode="HTML", reply_markup=markup)
+            if active_card['type'] == 'photo':
+                framed_photo = await make_occult_card_frame(context, active_card['file_id'])
+                if framed_photo is not None:
+                    await query.edit_message_media(media=InputMediaPhoto(media=framed_photo, caption=full_text, parse_mode="HTML"), reply_markup=markup)
+                else:
+                    await query.edit_message_caption(caption=full_text, parse_mode="HTML", reply_markup=markup)
+            else:
+                await query.edit_message_caption(caption=full_text, parse_mode="HTML", reply_markup=markup)
         except Exception:
             try:
                 await query.edit_message_text(text=full_text, parse_mode="HTML", reply_markup=markup)
