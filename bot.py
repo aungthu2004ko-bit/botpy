@@ -518,7 +518,7 @@ async def register_user_group(user, chat, context: ContextTypes.DEFAULT_TYPE = N
                     try:
                         await context.bot.send_message(
                             chat_id,
-                            "Bot အသုံးပြုအတွက်ကျေးဇူးအထူးတင်ပါတယ် Bot ကို Admin ပေးပါက Media ကောင်းကောင်းအလုပ်လုပ်ပါမည်。"
+                            "Thank you for using the bot! Please grant the bot admin permissions so media features can work properly."
                         )
                     except Exception:
                         pass
@@ -665,8 +665,8 @@ async def check_main_group_restriction(update: Update, context: ContextTypes.DEF
         if not is_main_group:
             restriction_text = (
                 "This Command Will Work In This Main Group\n"
-                "Heyy သူများGpမှာမဖောက်ပါနဲ့နော် သူများမျက်စိနှောက်လိမ့်မယ် "
-                "အဲ့ဒီ command တွေကိုတော့ ဒီGroupမှာပဲ လာဖောက်ပေးပါနော် ✨"
+                "Please do not use this command in other groups. It may disturb their members. "
+                "Please use those commands only in this group. ✨"
             )
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Main Group 🏰", url=MAIN_GROUP_LINK, style="primary")]
@@ -713,8 +713,8 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 secs = remaining % 60
                 time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
                 return await msg.reply_text(
-                    f"⏳ မင်္ဂလာပါ {get_mention(user.id, display_name)}၊ /pre ကို တစ်နေ့လျှင် 3 ကြိမ်သာ ဖောက်ယူနိုင်ပါသည်။\n"
-                    f"⏱ ကျန်ရှိသောအချိန်: <b>{time_str}</b>",
+                    f"⏳ Hello {get_mention(user.id, display_name)}, you can use /pre only 3 times per day.\n"
+                    f"⏱ Time remaining: <b>{time_str}</b>",
                     parse_mode="HTML",
                     reply_to_message_id=msg_id
                 )
@@ -810,7 +810,7 @@ async def aa_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     full_text = msg.text.partition(" ")[2].strip()
     if not full_text:
-        return await msg.reply_text("❌ Usage: `/aa မေးခွန်း / အဖြေ၁ / အဖြေ၂ / အဖြေ၃ ...`", parse_mode="Markdown", reply_to_message_id=msg.message_id)
+        return await msg.reply_text("❌ Usage: `/aa question / option1 / option2 / option3 ...`", parse_mode="Markdown", reply_to_message_id=msg.message_id)
 
     if "/" in full_text:
         parts = [p.strip() for p in full_text.split("/")]
@@ -818,12 +818,12 @@ async def aa_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = [p.strip() for p in full_text.split(".")]
 
     if len(parts) < 3:
-        return await msg.reply_text("❌ အနည်းဆုံး မေးခွန်း ၁ ခုနှင့် အဖြေ ၂ ခု ထည့်ပေးရပါမည်။ ဥပမာ: `/aa မေးခွန်း / အဖြေ၁ / အဖြေ၂`", parse_mode="Markdown", reply_to_message_id=msg.message_id)
+        return await msg.reply_text("❌ Please provide at least 1 question and 2 answer options. Example: `/aa question / option1 / option2`", parse_mode="Markdown", reply_to_message_id=msg.message_id)
 
     question = parts[0]
     options = parts[1:]
 
-    preview_text = f"❓ <b>Trivia Quiz Preview</b>\n\n<b>{question}</b>\n\n<i>👇 ကျေးဇူးပြု၍ အောက်ပါခလုတ်များမှ အဖြေမှန်ကို ရွေးချယ်ပေးပါ -</i>"
+    preview_text = f"❓ <b>Trivia Quiz Preview</b>\n\n<b>{question}</b>\n\n<i>👇 Please select the correct answer using the buttons below:</i>"
     
     keyboard = []
     for idx, opt in enumerate(options):
@@ -831,7 +831,7 @@ async def aa_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     select_row = []
     for idx, opt in enumerate(options):
-        select_row.append(InlineKeyboardButton(f"✅ အဖြေမှန် ({idx+1})", callback_data=f"aa_sel_{idx}", style="primary"))
+        select_row.append(InlineKeyboardButton(f"✅ Correct Answer ({idx+1})", callback_data=f"aa_sel_{idx}", style="primary"))
     keyboard.append(select_row)
 
     sent = await msg.reply_text(preview_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), reply_to_message_id=msg.message_id)
@@ -866,7 +866,7 @@ async def send_quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     quiz_data = pending_quizzes[reply.message_id]
     if not quiz_data.get('correct'):
-        return await msg.reply_text("❌ ကျေးဇူးပြု၍ Quiz ပုံစံတွင် အဖြေမှန်ကို အရင်ဆုံး inline button နှိပ်၍ ရွေးချယ်ပေးပါ။", reply_to_message_id=msg.message_id)
+        return await msg.reply_text("❌ Please select the correct answer using an inline button in the quiz preview first.", reply_to_message_id=msg.message_id)
 
     async with db_pool.acquire() as conn:
         groups = await conn.fetch("SELECT chat_id FROM groups")
@@ -973,18 +973,18 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             round_id, side = parts[1], parts[2]
             round_state = tg_rounds.get(round_id)
             if not round_state or not round_state.get("open"):
-                return await update.message.reply_text("⏰ ဒီပွဲရဲ့ လောင်းကြေးပိတ်သွားပါပြီ။ နောက်ပွဲမှာ ပြန်လောင်းနိုင်ပါတယ်။")
+                return await update.message.reply_text("⏰ Betting for this round has closed. You can place a bet in the next round.")
             if user.id in round_state["bets"]:
-                return await update.message.reply_text("ဒီပွဲမှာ လောင်းကြေးထည့်ပြီးပါပြီ။")
+                return await update.message.reply_text("You have already placed a bet in this round.")
             if user.id in tg_pending_bets:
-                return await update.message.reply_text("လက်ရှိလောင်းကြေးပမာဏကို အရင်ထည့်ပေးပါ။")
+                return await update.message.reply_text("Please enter your current bet amount first.")
             tg_pending_bets[user.id] = {"round_id": round_id, "side": side}
-            side_name = "🐅 ကျား (TIGER)" if side == "T" else "🐉 နဂါး (DRAGON)"
+            side_name = "🐅 TIGER" if side == "T" else "🐉 DRAGON"
             return await update.message.reply_text(
-                f"━━━━━━━━━━━━━━━━━━\n{side_name} ကို ရွေးထားပါတယ်။\n"
-                "💰 လောင်းကြေးပမာဏကို ရိုက်ထည့်ပါ။\n"
-                "အနည်းဆုံး 1 မှ အများဆုံး 100,000 Kachi\n"
-                "ဥပမာ — 5000",
+                f"━━━━━━━━━━━━━━━━━━\n{side_name} selected.\n"
+                "💰 Enter your bet amount.\n"
+                "Minimum: 1 | Maximum: 100,000 Kachi\n"
+                "Example: 5000",
             )
 
     bot_info = await context.bot.get_me()
@@ -992,19 +992,14 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🌺 Welcome to Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏!
 
-📌 <b>How to Use / အသုံးပြုနည်း</b>
+📌 <b>How to Use</b>
 
-<b>မြန်မာ</b>
-- Bot ကို Group ထဲသို့ ထည့်ပါ။
-- Group ထဲတွင် စာများပေးပို့ပါ။ သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက Character Card အလိုအလျောက် ကျလာပါမည်။
-- ကတ်ကျလာပါက အောက်ရှိ <b>နာမည်ဖြေရန်</b> ကိုနှိပ်ပြီး Character Name ကို ဖြည့်သွင်းပါ။
-- Leaderboard ကြည့်ရန် /ktop ကို အသုံးပြုပါ။
-
-<b>English</b>
+<b>Instructions</b>
 - Add the bot to your group.
 - Send messages in the group. A Character Card will drop automatically when the message limit is reached.
-- When a card drops, tap <b>နာမည်ဖြေရန်</b> and enter the character name.
-- Use /ktop to view the leaderboard."""
+- When a card drops, tap <b>Guess Name</b> and enter the character's name.
+- Use /ktop to view the leaderboard.
+"""
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -1078,8 +1073,8 @@ async def kdaily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 secs = remaining % 60
                 time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
                 return await msg.reply_text(
-                    f"⏳ မင်္ဂလာပါ {get_mention(user.id, display_name)}၊ /kdaily ဆုလက်ဆောင်ကို 24 နာရီမှ တစ်ကြိမ်သာ ထုတ်ယူနိုင်ပါသည်။\n"
-                    f"⏱ ကျန်ရှိသောအချိန်: <b>{time_str}</b>",
+                    f"⏳ Hello {get_mention(user.id, display_name)}, you can claim the /kdaily reward once every 24 hours.\n"
+                    f"⏱ Time remaining: <b>{time_str}</b>",
                     parse_mode="HTML",
                     reply_to_message_id=msg_id
                 )
@@ -1092,7 +1087,7 @@ async def kdaily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 User: {get_mention(user.id, display_name)}\n"
         f"💎 Reward: <b>+1000 Kachi</b> 🩸\n"
         f"💰 Total Balance: <b>{new_coins}</b> Kachi\n\n"
-        f"<i>ကျေးဇူးတင်ပါတယ်! မနက်ဖြန်လည်း ထပ်မံလာရောက် ထုတ်ယူနိုင်ပါပြီ ✨</i>",
+        f"<i>Thank you! Come back tomorrow to claim your next reward. ✨</i>",
         parse_mode="HTML",
         reply_to_message_id=msg_id
     )
@@ -1254,7 +1249,7 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
             chat_id=chat_id,
             message_id=msg.message_id,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("နာမည်ဖြေရန်", callback_data=f"kdropname_{msg.message_id}", style="danger")
+                InlineKeyboardButton("Guess Name", callback_data=f"kdropname_{msg.message_id}", style="danger")
             ]])
         )
     except Exception as e:
@@ -1385,7 +1380,7 @@ async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: i
     if drop['winner_id'] is None:
         drop['ended'] = True
         try:
-            await context.bot.send_message(drop['chat_id'], '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။', reply_to_message_id=msg_id)
+            await context.bot.send_message(drop['chat_id'], '⏰ Time is up! The card has been locked. You can catch the next card when it drops.', reply_to_message_id=msg_id)
         except Exception as e:
             print(f"Could not post expired notice: {e}")
     active_card_drops.pop(msg_id, None)
@@ -1429,8 +1424,8 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raw_items = context.args
         else:
             return await msg.reply_text(
-                "❌ ကျေးဇူးပြု၍ ရောင်းသူ၏ User ID ထည့်ပါ သို့မဟုတ် ရောင်းသူ၏စာကို Reply လုပ်၍ `/buy [card_id]` ဟု အသုံးပြုပါ။\n"
-                "ဥပမာ: `/buy 7940553702 0192x 1111` သို့မဟုတ် Reply လုပ်၍ಗೊಳပီး `/buy 0192x`",
+                "❌ Please enter the seller's User ID, or reply to the seller's message and use `/buy [card_id]`.\n"
+                "Example: `/buy 7940553702 0192x 1111` or reply to the seller's message with `/buy 0192x`.",
                 parse_mode="Markdown",
                 reply_to_message_id=msg_id
             )
@@ -1549,7 +1544,7 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <i>Click the button below to confirm.</i>"""
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("ဝယ်မည် ✅", callback_data=f"buy_confirm_{user.id}_{seller_id}", style="success")
+        InlineKeyboardButton("Buy ✅", callback_data=f"buy_confirm_{user.id}_{seller_id}", style="success")
     ]])
 
     sent_msg = await msg.reply_text(buy_text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
@@ -1569,7 +1564,7 @@ async def kcode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args or len(context.args) < 3:
-        return await update.message.reply_text("❌ Usage: `/kcode [code] [kachi_amount] [max_users]`\nဥပမာ: `/kcode wond 2000 5`", parse_mode="Markdown", reply_to_message_id=msg_id)
+        return await update.message.reply_text("❌ Usage: `/kcode [code] [kachi_amount] [max_users]`\nExample: `/kcode wond 2000 5`", parse_mode="Markdown", reply_to_message_id=msg_id)
 
     code = context.args[0].strip().lower()
     try:
@@ -1614,7 +1609,7 @@ async def rede_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with conn.transaction():
             code_row = await conn.fetchrow("SELECT kachi, max_uses, used_count FROM redeem_codes WHERE code = $1 FOR UPDATE", code)
             if not code_row:
-                return await msg.reply_text("❌ <b>အသုံးမပြုနိုင်သော (သို့မဟုတ်) မရှိတော့သော Code ဖြစ်ပါသည်။</b>", parse_mode="HTML", reply_to_message_id=msg_id)
+                return await msg.reply_text("❌ <b>This code is invalid or no longer available.</b>", parse_mode="HTML", reply_to_message_id=msg_id)
 
             kachi = code_row['kachi']
             max_uses = code_row['max_uses']
@@ -1622,10 +1617,10 @@ async def rede_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             already = await conn.fetchrow("SELECT 1 FROM code_redemptions WHERE code = $1 AND user_id = $2", code, user.id)
             if already:
-                return await msg.reply_text("❌ <b>သင်သည် ဤ Code ကို အသုံးပြုပြီးသား ဖြစ်ပါသည်။</b>", parse_mode="HTML", reply_to_message_id=msg_id)
+                return await msg.reply_text("❌ <b>You have already used this code.</b>", parse_mode="HTML", reply_to_message_id=msg_id)
 
             if used_count >= max_uses:
-                return await msg.reply_text("❌ <b>ဝမ်းနည်းပါတယ်၊ ဤ Code မှာ လူပြည့်သွားပါပြီ (Limit Reached)။</b>", parse_mode="HTML", reply_to_message_id=msg_id)
+                return await msg.reply_text("❌ <b>Sorry, this code has reached its usage limit.</b>", parse_mode="HTML", reply_to_message_id=msg_id)
 
             await conn.execute("UPDATE redeem_codes SET used_count = used_count + 1 WHERE code = $1", code)
             await conn.execute("INSERT INTO code_redemptions (code, user_id) VALUES ($1, $2)", code, user.id)
@@ -2523,7 +2518,7 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if any(c.isalpha() for c in card_id):
             return await update.message.reply_text(
-                "❌ Card ID ထဲတွင် English စာလုံးများ (Letters) ပါဝင်၍ မရပါ။ နံပတ် (Numbers) သာ ဖြစ်ရပါမည် (ဥပမာ - 02873)。",
+                "❌ ❌ Card ID must contain numbers only. English letters are not allowed (Example: 02873).",
                 parse_mode="HTML",
                 reply_to_message_id=msg_id
             )
@@ -2615,7 +2610,7 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
 
     caption = (msg.caption or "").strip()
     if not caption or "Card Name" not in caption or "Rarity" not in caption:
-        return await msg.reply_text("❌ ဒီ Forward က Card Log ပုံစံမဟုတ်ပါ။ Card Log တစ်ခုလုံးကို ပုံ/ဗီဒီယိုနဲ့အတူ Forward လုပ်ပေးပါ။")
+        return await msg.reply_text("❌ This forwarded message is not a Card Log. Please forward the complete Card Log with its photo/video.")
 
     def field(pattern):
         match = re.search(pattern, caption, flags=re.IGNORECASE | re.MULTILINE)
@@ -2627,7 +2622,7 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
     rarity_line = field(r"^\s*🌟?\s*Rarity\s*:\s*(.+?)\s*$")
 
     if not all((card_id, card_name, rarity_line)):
-        return await msg.reply_text("❌ Card Log ထဲက ID / Name / Rarity ကို မဖတ်နိုင်ပါ။ မူရင်း Log ကို Screenshot ပို့ပေးပါ။")
+        return await msg.reply_text("❌ Could not read the ID / Name / Rarity from the Card Log. Please send a screenshot of the original log.")
 
     # If the old log has no Collection field, assign one from the bot's existing collection pool.
     if not collection:
@@ -2651,14 +2646,14 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
         if "🎀" in rarity_line:
             rarity = "Birthday Special"
         else:
-            return await msg.reply_text(f"❌ မသိတဲ့ Rarity ဖြစ်ပါတယ်: {rarity_line}")
+            return await msg.reply_text(f"❌ Unknown Rarity: {rarity_line}")
 
     if msg.photo:
         file_id, c_type = msg.photo[-1].file_id, "photo"
     elif msg.video:
         file_id, c_type = msg.video.file_id, "video"
     else:
-        return await msg.reply_text("❌ Forward လုပ်ထားတဲ့ Log မှာ Photo/Video မပါပါ။")
+        return await msg.reply_text("❌ The forwarded log does not contain a photo or video.")
 
     is_locked = rarity == "Beyond"
     try:
@@ -2670,7 +2665,7 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
                 if existing:
                     return await msg.reply_text(
                         f"⚠️ Duplicate Card ID: <code>{card_id}</code>\n"
-                        f"ရှိပြီးသား Card: {existing['name']}",
+                        f"Existing Card: {existing['name']}",
                         parse_mode="HTML"
                     )
                 await conn.execute("""
@@ -2679,7 +2674,7 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
                 """, card_id, card_name, c_type, file_id, rarity, collection, is_locked)
     except Exception as exc:
         print(f"Forwarded card import failed for ID {card_id}: {type(exc).__name__}: {exc}")
-        return await msg.reply_text("❌ Database ထဲထည့်မရပါ။ Railway Deploy Logs ကို စစ်ပါ။")
+        return await msg.reply_text("❌ Could not add the card to the database. Please check the Railway deployment logs.")
 
     await msg.reply_text(
         "✅ Card imported successfully!\n\n"
@@ -2820,7 +2815,7 @@ async def khmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.message_id
     await register_user_group(user, chat, context)
 
-    text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
+    text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nPlease select the rarity you want to display:"
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond", style="primary"),
@@ -2857,7 +2852,7 @@ async def resethmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE users SET kc_rarity_mode = NULL WHERE user_id = $1", user.id)
 
-    await update.message.reply_text("✅ Reset Successful! /kc တွင် ကတ်အားလုံးကို ပုံမှန်အတိုင်း ပြန်လည်ပြသမည် ဖြစ်ပါသည်။", parse_mode="HTML", reply_to_message_id=msg_id)
+    await update.message.reply_text("✅ Reset successful! All cards will now be displayed in /kc as usual.", parse_mode="HTML", reply_to_message_id=msg_id)
 
 @restricted_command
 async def kshop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3288,8 +3283,8 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_link = f"tg://openmessage?chat_id={sess['chat_id']}&message_id={sess['message_id']}"
         
         warning_text = (
-            f"⚠️ <b>အရင် kslot မပြီးသေးပါခင်ဗျာ!</b>\n"
-            f"ကျေးဇူးပြု၍ အောက်ပါလင့်ခ်သို့ သွားရောက်၍ အဆုံးသတ်ပေးပါရန် -\n"
+            f"⚠️ <b>Your previous kslot game is still active!</b>\n"
+            f"Please open the link below to finish it:\n"
             f"🔗 <a href=\"{msg_link}\">Go to Active Kslot Message</a>"
         )
         return await msg.reply_text(warning_text, parse_mode="HTML", reply_to_message_id=msg_id)
@@ -3300,8 +3295,8 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - last_kslot < cooldown_duration:
         remaining = int(cooldown_duration - (now - last_kslot))
         return await msg.reply_text(
-            f"⏳ မင်္ဂလာပါ {get_mention(user.id, user.first_name)}၊ /kslot ကို တစ်ပွဲပြီးလျှင် <b>{cooldown_duration} စက္ကန့်</b> စောင့်ဆိုင်းပေးပါ။\n"
-            f"⏱ ကျန်ရှိသောအချိန်: <b>{remaining}s</b>",
+            f"⏳ Hello {get_mention(user.id, user.first_name)}, please wait <b>{cooldown_duration} seconds</b> after each /kslot game.\n"
+            f"⏱ Time remaining: <b>{remaining}s</b>",
             parse_mode="HTML",
             reply_to_message_id=msg_id
         )
@@ -3322,7 +3317,7 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"""🎰 <b>Kachi Slot Machine Game</b>
 
 👤 Player: {get_mention(user.id, user.first_name)}
-👇 ကျေးဇူးပြု၍ ဂိမ်းစတင်ရန် လောင်းကြေးပမာဏ (Betting Amount) ကို ရွေးချယ်ပါ -"""
+👇 Please select your bet amount to start the game:"""
 
     sent_msg = await msg.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard_rows), reply_to_message_id=msg_id)
     active_kslot_sessions[user.id] = {
@@ -3454,15 +3449,15 @@ async def kbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - last_kbox < 35:
         remaining = int(35 - (now - last_kbox))
         return await msg.reply_text(
-            f"⏳ မင်္ဂလာပါ {get_mention(user.id, user.first_name)}၊ /kbox ကို တစ်ပွဲပြီးလျှင် <b>35 စက္ကန့်</b> စောင့်ဆိုင်းပေးပါ။\n"
-            f"⏱ ကျန်ရှိသောအချိန်: <b>{remaining}s</b>",
+            f"⏳ Hello {get_mention(user.id, user.first_name)}, please wait <b>35 seconds</b> after each /kbox game.\n"
+            f"⏱ Time remaining: <b>{remaining}s</b>",
             parse_mode="HTML",
             reply_to_message_id=msg_id
         )
     kbox_cooldowns[user.id] = now
 
     if user.id in active_kbox_users:
-        return await msg.reply_text("❌ သင့်မှာ Kbox တစ်ခု ဖွင့်နေဆဲ ရှိပါသေးသည်။ အရင်ဟာ ပြီးဆုံးသည်အထိ စောင့်ဆိုင်းပေးပါ။", reply_to_message_id=msg_id)
+        return await msg.reply_text("❌ You already have an active Kbox session. Please wait until it is finished.", reply_to_message_id=msg_id)
 
     cooldown = 86400
 
@@ -3485,8 +3480,8 @@ async def kbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             secs = remaining % 60
             time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
             return await msg.reply_text(
-                f"⏳ မင်္ဂလာပါ {get_mention(user.id, display_name)}၊ /kbox ကို တစ်နေ့လျှင် 7 ကြိမ်သာ ဖွင့်လှစ်နိုင်ပါသည်။\n"
-                f"⏱ ကျန်ရှိသောအချိန်: <b>{time_str}</b>",
+                f"⏳ Hello {get_mention(user.id, display_name)}, you can open /kbox only 7 times per day.\n"
+                f"⏱ Time remaining: <b>{time_str}</b>",
                 parse_mode="HTML",
                 reply_to_message_id=msg_id
             )
@@ -3933,7 +3928,7 @@ async def render_glist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE,
 🆔 Gp ID: <code>{chat_id}</code>
 👥 Gp Member: {member_count}
 🔗 Gp Link: {invite_link}
-👤 Addသူ name: {adder_text}"""
+👤 Added by: {adder_text}"""
         group_blocks.append(block)
 
     groups_str = "\n\n".join(group_blocks)
@@ -4293,25 +4288,25 @@ TG_CARD_RANKS = (("A", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5),
 def tg_game_keyboard(round_id, bot_username):
     # Deep links open the bot DM directly; start payload selects the side.
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🐅  ကျား (T) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_T", style="success"),
-        InlineKeyboardButton("🐉  နဂါး (D) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_D", style="success")
+        InlineKeyboardButton("🐅  Bet on TIGER (T)", url=f"https://t.me/{bot_username}?start=tg_{round_id}_T", style="success"),
+        InlineKeyboardButton("🐉  Bet on DRAGON (D)", url=f"https://t.me/{bot_username}?start=tg_{round_id}_D", style="success")
     ]])
 
 
-def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွင့်ထားသည်"):
+def tg_game_text(round_state, status="🟢 Betting is OPEN"):
     return (
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🐅 <b>ကျားနဂါးတိုက်ပွဲ</b> 🐉\n"
+        "🐅 <b>TIGER VS DRAGON</b> 🐉\n"
         "<b>𝐓𝐈𝐆𝐄𝐑  ⚔️  𝐃𝐑𝐀𝐆𝐎𝐍</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🐅 <b>ကျား TIGER</b>\n"
+        "🐅 <b>TIGER</b>\n"
         f"💰 <b>{round_state['tiger_total']:,} Kachi</b>\n\n"
-        "🐉 <b>နဂါး DRAGON</b>\n"
+        "🐉 <b>DRAGON</b>\n"
         f"💰 <b>{round_state['dragon_total']:,} Kachi</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏳ <b>{status}</b>\n"
-        "💎 အများဆုံးလောင်းကြေး — <b>100,000 Kachi</b>\n\n"
-        "👇 <b>အောက်က ခလုတ်နဲ့ ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ</b>"
+        "💎 Maximum Bet — <b>100,000 Kachi</b>\n\n"
+        "👇 <b>Choose a side using the buttons below, then place your bet in the bot DM</b>"
     )
 
 
@@ -4329,9 +4324,9 @@ def tg_result_text(round_state, tiger_label, dragon_label, result_label, winners
     if winners:
         text += "🏆 <b>WINNERS</b>\n" + " · ".join(winners)
     elif result_label.startswith("🤝"):
-        text += "🤝 <b>သရေဖြစ်သည် — လောင်းကြေး 2x ပြန်ရရှိပါသည်။</b>"
+        text += "🤝 <b>It's a draw — bets are refunded at 2x.</b>"
     else:
-        text += "🏆 <b>ဒီပွဲမှာ အနိုင်ရသူ မရှိပါ။</b>"
+        text += "🏆 <b>There is no winner in this round.</b>"
     return text
 
 
@@ -4344,12 +4339,12 @@ async def tg_start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or user.id != ADMIN_ID:
         return
     if not chat or chat.type != "private":
-        return await msg.reply_text("ဒီ Command ကို Bot DM မှာပဲ အသုံးပြုပါ။")
+        return await msg.reply_text("Please use this command in the bot's private chat.")
     if tg_game_task and not tg_game_task.done():
-        return await msg.reply_text("🐅🐉 Tiger vs Dragon Game လည်ပတ်နေပြီးသားပါ။")
+        return await msg.reply_text("🐅🐉 The Tiger vs Dragon game is already running.")
     tg_stop_requested = False
     tg_game_task = asyncio.create_task(run_tg_game(context))
-    await msg.reply_text("✅ Tiger vs Dragon Game ကို Main Channel မှာ စတင်လိုက်ပါပြီ။")
+    await msg.reply_text("✅ The Tiger vs Dragon game has started in the main channel.")
 
 
 @restricted_command
@@ -4361,11 +4356,11 @@ async def tg_stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or user.id != ADMIN_ID:
         return
     if not chat or chat.type != "private":
-        return await msg.reply_text("ဒီ Command ကို Bot DM မှာပဲ အသုံးပြုပါ။")
+        return await msg.reply_text("Please use this command in the bot's private chat.")
     if not tg_game_task or tg_game_task.done():
-        return await msg.reply_text("လက်ရှိ Tiger vs Dragon Game မဖွင့်ထားပါ။")
+        return await msg.reply_text("There is no active Tiger vs Dragon game.")
     tg_stop_requested = True
-    await msg.reply_text("🛑 /stoptg လက်ခံပြီးပါပြီ။ လက်ရှိပွဲပြီးဆုံးတာနဲ့ Game ကို ရပ်ပါမယ်။")
+    await msg.reply_text("🛑 /stoptg accepted. The game will stop when the current round ends.")
 
 
 async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
@@ -4404,7 +4399,7 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.edit_message_text(
                     chat_id=TIGER_DRAGON_CHANNEL_ID,
                     message_id=round_state["message_id"],
-                    text=tg_game_text(round_state, "🔒 လောင်းကြေးပိတ်ပါပြီ။ ဖဲဖွင့်နေပါသည်..."),
+                    text=tg_game_text(round_state, "🔒 Betting is closed. Revealing the result..."),
                     parse_mode="HTML"
                 )
             except Exception as e:
@@ -4414,13 +4409,13 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
             tiger_card, dragon_card = random.sample(deck, 2)
             if tiger_card[1] > dragon_card[1]:
                 result = "T"
-                result_label = "🐅 TIGER အနိုင်ရပါတယ်!"
+                result_label = "🐅 TIGER WINS!"
             elif dragon_card[1] > tiger_card[1]:
                 result = "D"
-                result_label = "🐉 DRAGON အနိုင်ရပါတယ်!"
+                result_label = "🐉 DRAGON WINS!"
             else:
                 result = "DRAW"
-                result_label = "🤝 သရေကျပါတယ်!"
+                result_label = "🤝 IT'S A DRAW!"
 
             # Settle each stake exactly once. Stakes were deducted when accepted.
             winner_mentions = []
@@ -4428,13 +4423,13 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
                 amount = bet["amount"]
                 if result == "DRAW":
                     payout = amount * 2
-                    outcome = "သရေ 2x"
+                    outcome = "DRAW 2x"
                 elif bet["side"] == result:
                     payout = amount * 3 // 2
-                    outcome = "အနိုင် 1.5x"
+                    outcome = "WIN 1.5x"
                 else:
                     payout = 0
-                    outcome = "အရှုံး"
+                    outcome = "LOSE"
                 if payout > 0:
                     async with db_pool.acquire() as conn:
                         async with conn.transaction():
@@ -4491,7 +4486,7 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=TIGER_DRAGON_CHANNEL_ID,
-                text="🛑 <b>Tiger vs Dragon Game ရပ်နားလိုက်ပါပြီ။</b>",
+                text="🛑 <b>The Tiger vs Dragon game has been stopped.</b>",
                 parse_mode="HTML"
             )
         except Exception:
@@ -4502,31 +4497,31 @@ async def handle_tg_bet_callback(query, context):
     user = query.from_user
     parts = query.data.split("_")
     if len(parts) != 3:
-        return await query.answer("Game data မမှန်ကန်ပါ။", show_alert=True)
+        return await query.answer("Invalid game data.", show_alert=True)
     round_id, side = parts[1], parts[2]
     round_state = tg_rounds.get(round_id)
     if not round_state or not round_state["open"]:
-        return await query.answer("⏰ ဒီပွဲရဲ့ လောင်းကြေးပိတ်သွားပါပြီ။", show_alert=True)
+        return await query.answer("⏰ Betting for this round has closed.", show_alert=True)
     if user.id in round_state["bets"]:
-        return await query.answer("ဒီပွဲမှာ လောင်းကြေးထည့်ပြီးပါပြီ။", show_alert=True)
+        return await query.answer("You have already placed a bet in this round.", show_alert=True)
     if user.id in tg_pending_bets:
-        return await query.answer("Bot DM မှာ လောင်းကြေးပမာဏ အရင်ထည့်ပေးပါ။", show_alert=True)
+        return await query.answer("Please enter your bet amount in the bot's private chat first.", show_alert=True)
     tg_pending_bets[user.id] = {"round_id": round_id, "side": side}
-    side_name = "🐅 ကျား (TIGER)" if side == "T" else "🐉 နဂါး (DRAGON)"
+    side_name = "🐅 TIGER" if side == "T" else "🐉 DRAGON"
     try:
         await context.bot.send_message(
             chat_id=user.id,
             text=(
-                f"{side_name} ကို ရွေးထားပါတယ်။\n"
-                "လောင်းကြေး Kachi ပမာဏကို အခုရိုက်ထည့်ပါ။\n"
-                "အနည်းဆုံး 1၊ အများဆုံး 100,000 Kachi ဖြစ်ပါတယ်။\n"
-                "ဥပမာ - 5000"
+                f"{side_name} selected.\n"
+                "Enter your bet amount in Kachi now.\n"
+                "Minimum: 1 | Maximum: 100,000 Kachi.\n"
+                "Example: 5000"
             )
         )
     except Exception:
         tg_pending_bets.pop(user.id, None)
-        return await query.answer("Bot DM ကို အရင် /start လုပ်ပြီးမှ လောင်းနိုင်ပါတယ်။", show_alert=True)
-    await query.answer("Bot DM ကို စစ်ပြီး လောင်းကြေးထည့်ပါ။")
+        return await query.answer("Please send /start to the bot in a private chat before betting.", show_alert=True)
+    await query.answer("Check your bot DM and place your bet.")
 
 
 async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4538,23 +4533,23 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
     round_state = tg_rounds.get(pending["round_id"])
     if not round_state or not round_state["open"]:
         tg_pending_bets.pop(user.id, None)
-        return await msg.reply_text("⏰ ဒီပွဲရဲ့ လောင်းကြေးပိတ်သွားပါပြီ။ နောက်ပွဲမှာ ပြန်လောင်းနိုင်ပါတယ်။")
+        return await msg.reply_text("⏰ Betting for this round has closed. You can place a bet in the next round.")
     raw_amount = (msg.text or "").strip().replace(",", "")
     if not raw_amount.isdigit():
-        return await msg.reply_text("❌ Kachi ပမာဏကို ဂဏန်းနဲ့ပဲ ရိုက်ထည့်ပါ။ ဥပမာ 5000")
+        return await msg.reply_text("❌ Enter the Kachi amount using numbers only. Example: 5000")
     amount = int(raw_amount)
     if amount < 1 or amount > TG_MAX_BET:
-        return await msg.reply_text("❌ တစ်ကြိမ်လောင်းကြေးသည် 1 မှ 100,000 Kachi အတွင်း ဖြစ်ရပါမယ်။")
+        return await msg.reply_text("❌ Each bet must be between 1 and 100,000 Kachi.")
 
     async with tg_game_lock:
         # Re-check after lock to prevent double submissions / late bets.
         round_state = tg_rounds.get(pending["round_id"])
         if not round_state or not round_state["open"]:
             tg_pending_bets.pop(user.id, None)
-            return await msg.reply_text("⏰ လောင်းကြေးပိတ်သွားပါပြီ။")
+            return await msg.reply_text("⏰ Betting has closed.")
         if user.id in round_state["bets"]:
             tg_pending_bets.pop(user.id, None)
-            return await msg.reply_text("ဒီပွဲမှာ လောင်းကြေးထည့်ပြီးပါပြီ။")
+            return await msg.reply_text("You have already placed a bet in this round.")
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 updated = await conn.fetchrow(
@@ -4568,7 +4563,7 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
                         "SELECT coins FROM users WHERE user_id = $1", user.id
                     )
                     return await msg.reply_text(
-                        f"❌ Kachi မလုံလောက်ပါ။ လက်ကျန် {current or 0:,} Kachi ရှိပါတယ်။"
+                        f"❌ Not enough Kachi. Your current balance is {current or 0:,} Kachi."
                     )
         side = pending["side"]
         round_state["bets"][user.id] = {
@@ -4585,12 +4580,12 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
     await msg.reply_text(
         f"━━━━━━━━━━━━━━━━━━\n"
         f"✅ <b>BET CONFIRMED</b>\n"
-        f"{side_name} ဘက် — <b>{amount:,} Kachi</b>\n"
-        f"💰 လက်ကျန် — <b>{updated['coins']:,} Kachi</b>\n"
+        f"{side_name} Side — <b>{amount:,} Kachi</b>\n"
+        f"💰 Balance — <b>{updated['coins']:,} Kachi</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        "ပွဲရလဒ်ကို Channel မှာ ကြည့်နိုင်ပါတယ်။",
+        "You can view the round results in the channel.",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📣 Channel ကို ပြန်သွားမယ်", url="https://t.me/beyondpoe", style="primary")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📣 Return to Channel", url="https://t.me/beyondpoe", style="primary")]])
     )
     try:
         bot_info = await context.bot.get_me()
@@ -4699,7 +4694,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await query.edit_message_text(
-                f"🎰 <b>Kachi Slot Machine Game</b>\n\n👤 Player: {get_mention(user.id, display_name)}\n🩸 Bet Amount: <b>{bet_amount}</b> Kachi\n\n<i>👇 ကျေးဇူးပြု၍ Spin သို့မဟုတ် Cancel ကို နှိပ်ပါ -</i>",
+                f"🎰 <b>Kachi Slot Machine Game</b>\n\n👤 Player: {get_mention(user.id, display_name)}\n🩸 Bet Amount: <b>{bet_amount}</b> Kachi\n\n<i>👇 Please press Spin or Cancel:</i>",
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
@@ -4722,7 +4717,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await query.edit_message_text(
-                "❌ <b>Kachi Slot Game Cancelled.</b>\n⏱ နောက်တစ်ကြိမ် ကစားရန် 15 စက္ကန့် စောင့်ဆိုင်းပေးပါ။",
+                "❌ <b>Kachi Slot Game Cancelled.</b>\n⏱ Please wait 15 seconds before playing again.",
                 parse_mode="HTML",
                 reply_markup=None
             )
@@ -4825,7 +4820,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await query.answer("❌ This is not your Kbox button!", show_alert=True)
 
         if user.id in active_kbox_users:
-            return await query.answer("❌ သင့်၏ Kbox တစ်ခုမှာ ယခုလက်ရှိ ဖွင့်ဆိုဆဲဖြစ်ပါသည်၊ ပြီးဆုံးသည်အထိ စောင့်ပါရန်။", show_alert=True)
+            return await query.answer("❌ You already have an active Kbox session. Please wait until it is finished.", show_alert=True)
         active_kbox_users.add(user.id)
 
         now = int(time.time())
@@ -4845,7 +4840,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if kbox_count >= 7:
                     active_kbox_users.discard(user.id)
-                    return await query.answer("❌ /kbox ကို တစ်နေ့လျှင် 7 ကြိမ်သာ ဖွင့်လှစ်နိုင်ပါတော့သည်။", show_alert=True)
+                    return await query.answer("❌ You can open /kbox only 7 times per day.", show_alert=True)
 
                 if current_coins < 1000:
                     active_kbox_users.discard(user.id)
@@ -4900,7 +4895,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id != allowed_uid:
             return await query.answer("❌ This is not for you!", show_alert=True)
         
-        text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
+        text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nPlease select the rarity you want to display:"
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond", style="primary"),
@@ -4943,7 +4938,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await query.edit_message_text(
-                f"✅ <b>Successfully set rarity mode to {get_rarity_display(rarity)}!</b>\n\nယခုမှစ၍ `/kc` တွင် ဤ Rarity ကတ်များကိုသာ သီးသန့်ပြသပေးမည် ဖြစ်ပါသည်။",
+                f"✅ <b>Successfully set rarity mode to {get_rarity_display(rarity)}!</b>\n\nFrom now on, /kc will display only cards of this rarity.",
                 parse_mode="HTML"
             )
         except Exception:
@@ -5052,18 +5047,18 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
         return
 
     if data == "aa_noop":
-        return await query.answer("ℹ️ ဒါက အဖြေပြသသည့် ခလုတ်ဖြစ်ပါသည်။ အောက်နားရှိ အဖြေမှန်ရွေးရန် ခလုတ်ကို နှိပ်ပါ။", show_alert=True)
+        return await query.answer("ℹ️ This button displays an answer. Please use the button below to select the correct answer.", show_alert=True)
 
     if data.startswith("aa_sel_"):
         idx = int(data.split("_")[2])
         quiz = pending_quizzes.get(msg_id)
         if not quiz:
-            return await query.answer("❌ Quiz preview မရှိတော့ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။", show_alert=True)
+            return await query.answer("❌ The quiz preview no longer exists or has expired.", show_alert=True)
         
         quiz["correct"] = quiz["options"][idx]
         correct_opt = quiz["correct"]
         
-        updated_text = f"❓ <b>Trivia Quiz Preview</b>\n\n<b>{quiz['question']}</b>\n\n✅ <b>အဖြေမှန်ရွေးချယ်ပြီးပါပြီ:</b> <code>{correct_opt}</code>\n\n<i>ယခုထုတ်လွှင့်ရန် `/send` ကို အသုံးပြုနိုင်ပါပြီ။</i>"
+        updated_text = f"❓ <b>Trivia Quiz Preview</b>\n\n<b>{quiz['question']}</b>\n\n✅ <b>Correct answer selected:</b> <code>{correct_opt}</code>\n\n<i>You can now use `/send` to broadcast the quiz.</i>"
         
         keyboard = []
         for o_idx, opt in enumerate(quiz["options"]):
@@ -5072,7 +5067,7 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
         
         select_row = []
         for o_idx, opt in enumerate(quiz["options"]):
-            btn_text = f"✅ ရွေးပြီး ({o_idx+1})" if opt == correct_opt else f"အဖြေမှန် ({o_idx+1})"
+            btn_text = f"✅ Selected ({o_idx+1})" if opt == correct_opt else f"Correct Answer ({o_idx+1})"
             select_row.append(InlineKeyboardButton(btn_text, callback_data=f"aa_sel_{o_idx}", style="primary"))
         keyboard.append(select_row)
 
@@ -5080,7 +5075,7 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
             await query.edit_message_text(updated_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
             pass
-        await query.answer(f"✅ အဖြေမှန်အဖြစ် '{correct_opt}' ကို သတ်မှတ်ပြီးပါပြီ။", show_alert=True)
+        await query.answer(f"✅ '{correct_opt}' has been set as the correct answer.", show_alert=True)
         return
 
     if data.startswith("ans_"):
@@ -5100,10 +5095,10 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
                 quiz["answered_users"].add(user.id)
 
         if solved:
-            return await query.answer("❌ အဖြေမှန်ကို အခြားသူ ဖြေဆိုပြီးပါပြီ (သို့မဟုတ်) Quiz ပြီးဆုံးသွားပါပြီ။", show_alert=True)
+            return await query.answer("❌ Someone else has already answered correctly, or the quiz has ended.", show_alert=True)
 
         if already_answered:
-            return await query.answer("❌ သင် ဖြေဆိုပြီးဖြစ်ပါသည်။ တစ်ဦးလျှင် တစ်ကြိမ်သာ ဖြေဆိုခွင့်ရှိသည်။", show_alert=True)
+            return await query.answer("❌ You have already answered. Each user can answer only once.", show_alert=True)
 
         chosen_opt = quiz["options"][chosen_idx]
         if chosen_opt == quiz["correct"]:
@@ -5112,11 +5107,11 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
             coins_won = random.randint(1000, 3000)
             await add_coins(user.id, coins_won)
 
-            result_text = f"""✅ <b>အဖြေမှန်သွားပါပြီ!</b>
+            result_text = f"""✅ <b>Correct Answer!</b>
 
 ❓ <b>{quiz['question']}</b>
-👤 <b>အနိုင်ရသူ:</b> {get_mention(user.id, user.first_name)}
-💰 <b>ရရှိသော Kachi:</b> +{coins_won} 🩸
+👤 <b>Winner:</b> {get_mention(user.id, user.first_name)}
+💰 <b>Kachi Earned:</b> +{coins_won} 🩸
 
 CHECK /kc Use Kachi"""
 
@@ -5124,7 +5119,7 @@ CHECK /kc Use Kachi"""
                 await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=None)
             except Exception:
                 pass
-            await query.answer(f"🎉 မှန်ကန်ပါသည်။ +{coins_won} Kachi ရရှိပါသည်!", show_alert=True)
+            await query.answer(f"🎉 Correct! You earned +{coins_won} Kachi!", show_alert=True)
         else:
             quiz["wrong_users"].add(user.id)
             wrong_count = len(quiz["wrong_users"])
@@ -5133,7 +5128,7 @@ CHECK /kc Use Kachi"""
                 quiz["solved"] = True
 
             if is_exhausted:
-                expired_text = f"❌ <b>မှားဖြေခွင့်ကုန်သွားပါပြီ!</b>\n\n❓ <b>{quiz['question']}</b>\n\n✅ <b>အဖြေမှန်:</b> <code>{quiz['correct']}</code>"
+                expired_text = f"❌ <b>Answer time has expired!</b>\n\n❓ <b>{quiz['question']}</b>\n\n✅ <b>Correct Answer:</b> <code>{quiz['correct']}</code>"
                 try:
                     await query.edit_message_text(
                         chat_id=chat_id,
@@ -5144,9 +5139,9 @@ CHECK /kc Use Kachi"""
                     )
                 except Exception:
                     pass
-                await query.answer("❌ မှားဖြေခွင့်ကုန်သွားပါပြီ။", show_alert=True)
+                await query.answer("❌ Answer time has expired.", show_alert=True)
             else:
-                await query.answer("❌ အဖြေမှားနေပါသည်!", show_alert=True)
+                await query.answer("❌ That answer is incorrect!", show_alert=True)
         return
 
     if data == "menu_help":
@@ -5187,7 +5182,7 @@ Reply to a user's message and use:
 📌 <b>How to Use</b>
 - Add the bot to your group.
 - Send messages in the group. Character Cards will drop automatically when the message limit is reached.
-- When a card drops, tap <b>နာမည်ဖြေရန်</b> and enter the character name.
+- When a card drops, tap <b>Guess Name</b> and enter the character name.
 - Use /ktop to view the leaderboard."""
         keyboard = InlineKeyboardMarkup([
             [
