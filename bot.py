@@ -20,6 +20,7 @@ from telegram.ext import (
     filters,
     InlineQueryHandler,
     BaseUpdateProcessor,
+    ApplicationHandlerStop,
 )
 
 # Environment Variables
@@ -207,6 +208,11 @@ async def _init_db_once():
                 claim_date DATE,
                 count INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, claim_date)
+            );
+            CREATE TABLE IF NOT EXISTS spam_restrictions (
+                user_id BIGINT PRIMARY KEY,
+                until_ts BIGINT NOT NULL,
+                reason TEXT DEFAULT 'Spam'
             );
             CREATE TABLE IF NOT EXISTS redeem_codes (
                 code TEXT PRIMARY KEY,
@@ -430,6 +436,61 @@ async def check_and_auto_lock_card(conn, card_id):
             )
             if total_copies >= lock_limit:
                 await conn.execute("UPDATE cards SET is_locked = TRUE WHERE card_id = $1", card_id)
+
+async def get_user_restriction_status(user_id: int):
+    """Return active bot-command restriction (spam/ban/mute), if any."""
+    if not db_pool:
+        return None
+    now = int(time.time())
+    try:
+        async with db_pool.acquire() as conn:
+            spam_until = await conn.fetchval("SELECT until_ts FROM spam_restrictions WHERE user_id = $1", user_id)
+            if spam_until and spam_until > now:
+                return ("spam", int(spam_until))
+            if spam_until:
+                await conn.execute("DELETE FROM spam_restrictions WHERE user_id = $1", user_id)
+            row = await conn.fetchrow("SELECT banned, muted_until FROM users WHERE user_id = $1", user_id)
+            if row and row['banned']:
+                return ("ban", 0)
+            if row and row['muted_until'] and row['muted_until'] > now:
+                return ("mute", int(row['muted_until']))
+    except Exception as e:
+        print(f"Restriction lookup failed for {user_id}: {type(e).__name__}: {e}")
+    return None
+
+
+async def spam_command_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Block every command during spam/ban/mute except /kprofile."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or user.is_bot or user.id == ADMIN_ID:
+        return
+    command = (msg.text or "").split()[0].split("@", 1)[0].lower()
+    if command == "/kprofile":
+        return
+    restriction = await get_user_restriction_status(user.id)
+    if not restriction:
+        return
+    kind, until_ts = restriction
+    if kind == "spam":
+        remaining = max(0, until_ts - int(time.time()))
+        mins, secs = divmod(remaining, 60)
+        time_text = f"{mins}m {secs}s" if mins else f"{secs}s"
+        warning = f"🚫 Spam restriction active.\n⏳ Remaining: {time_text}\nOnly /kprofile can be used until it expires."
+    elif kind == "ban":
+        warning = "🚫 You are banned from using this bot. Only /kprofile is available."
+    else:
+        remaining = max(0, until_ts - int(time.time()))
+        mins, secs = divmod(remaining, 60)
+        time_text = f"{mins}m {secs}s" if mins else f"{secs}s"
+        warning = f"🔇 You are muted.\n⏳ Remaining: {time_text}\nOnly /kprofile can be used until it expires."
+    try:
+        await msg.reply_text(warning, reply_to_message_id=msg.message_id)
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
+
+
 
 def restricted_command(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2001,6 +2062,12 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ban_status = "Yes" if user_row and user_row['banned'] else "No"
     muted_until = int(user_row['muted_until'] or 0) if user_row else 0
     mute_status = "Yes" if muted_until > int(time.time()) else "No"
+    spam_status = await get_user_restriction_status(user.id)
+    spam_line = "🚫 <b>Spam Restriction</b> - No"
+    if spam_status and spam_status[0] == "spam":
+        remaining = max(0, spam_status[1] - int(time.time()))
+        mins, secs = divmod(remaining, 60)
+        spam_line = f"🚫 <b>Spam Restriction</b> - Yes | ⏳ {mins}m {secs}s remaining"
 
     lines = [
         "❄️ <b>Kachi USER profile</b>",
@@ -2018,6 +2085,7 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "",
         f"🚫 <b>Ban</b> - {ban_status}",
         f"⭕ <b>Mute</b> - {mute_status}",
+        spam_line,
         "",
         f"❀ <b>Fav Card</b> - {html.escape(fav_card['name'])} (ID: {fav_card['card_id']})" if fav_card else "❀ <b>Fav Card</b> - —",
         "",
@@ -3231,11 +3299,11 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     content_blocks = ["Collection"]
     for col_name, cards_in_col in collections_dict.items():
         content_blocks.append("")
-        content_blocks.append(f"      {col_name}")
+        content_blocks.append(f"🍀 <b>{col_name}</b>\n━━━━━━━━━━━━━━━━━━")
         for c in cards_in_col:
             r_emoji = get_rarity_emoji(c.get('rarity'))
-            count_str = f" {c['amount']}x" if c['amount'] > 1 else " 1x"
-            content_blocks.append(f"🍀{c['name']} {r_emoji} 🧩 [ {c['card_id']} ]{count_str}")
+            count_str = f" ({c['amount']}x)" if c['amount'] > 1 else " (1x)"
+            content_blocks.append(f"{c['card_id']} | {r_emoji} | {c['name']}{count_str}")
 
     cards_info = "\n".join(content_blocks)
     full_text = f"{text_header}\n\n{cards_info}"
@@ -3879,20 +3947,21 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         coin_value = "3000-5000"
 
-    caption_text = f"""🎗 Card Information ♡
+    caption_text = f"""🦋 <b>Here We Go Character Information !</b>
 
-▰▰▱▱▰▰▱▱
-🍀 Name - {card['name']}
-    🍀  ID - <code>{card['card_id']}</code>
-🎬 Type - {card['type'].upper()}
-🌟 Rarity - {r_display}
-📚 Collection - {col_name}{lock_str}
-🩸 User Sell Price ( {coin_value} )
-   🐠 Global Drops - <b>{global_drop_count}</b>
+🌵 <b>Collection name</b>
+{col_name}
+━━━━━━━━━━━━━━━━━━
+<b>Id - Name</b>
+<code>{card['card_id']}</code> - {card['name']}
+<b>[ {get_rarity_emoji(r)} · {r_display} ]</b>
 
-▰▰▱▱▰▰▱▱▰▰
-Top Owners 🐾
-{owners_str}"""
+🌍 <b>GLOBAL DROP -</b> {global_drop_count}
+
+⚡ <b>TOP 10 OWNERS OF THIS CHARACTER !</b>
+{owners_str}
+
+❀ <b>User Sell Price</b> - {coin_value}{lock_str}"""
 
     is_video = (card['type'] == 'video') or (str(card['file_id']).startswith("BAA"))
 
@@ -4147,6 +4216,12 @@ Status: Successful ✅
         now = time.time()
         key = (chat_id, user.id)
 
+        # Persisted spam/ban/mute restrictions also block reply-based card catches.
+        if user.id != ADMIN_ID:
+            restriction = await get_user_restriction_status(user.id)
+            if restriction:
+                return
+
         if key in spam_ignores and spam_ignores[key] > now:
             return
 
@@ -4160,6 +4235,15 @@ Status: Successful ✅
         if is_spamming:
             spam_ignores[key] = now + 600
             user_message_timestamps[key] = []
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO spam_restrictions (user_id, until_ts, reason) VALUES ($1, $2, 'Spam') "
+                        "ON CONFLICT (user_id) DO UPDATE SET until_ts = EXCLUDED.until_ts, reason = EXCLUDED.reason",
+                        user.id, int(now + 600)
+                    )
+            except Exception as e:
+                print(f"Could not persist spam restriction for {user.id}: {type(e).__name__}: {e}")
 
         if is_spamming:
             warning_text = f"{get_mention(user.id, user.first_name)} 10minutes ignore please don't spam like that again ⛩"
@@ -5546,6 +5630,7 @@ def main():
         .build()
     )
     app.add_error_handler(application_error_handler)
+    app.add_handler(MessageHandler(filters.COMMAND, spam_command_gate), group=-2)
 
     # Public User Commands
     app.add_handler(CommandHandler("start", start_cmd))
