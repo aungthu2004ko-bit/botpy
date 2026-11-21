@@ -38,6 +38,7 @@ MAIN_GROUP_LINK = "https://t.me/Kachi_sGroup"
 group_threshold = {}
 pending_gifts = {}
 active_card_drops = {}
+pending_catch_targets = {}  # (chat_id, user_id) -> spawned card message ID after .k reveal
 card_drop_locks = {}
 tg_game_task = None
 tg_stop_requested = False
@@ -1064,13 +1065,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>မြန်မာ</b>
 - Bot ကို Group ထဲသို့ ထည့်ပါ။
 - Group ထဲတွင် စာများပေးပို့ပါ။ သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက Character Card အလိုအလျောက် ကျလာပါမည်။
-- ကတ်ကျလာပါက အောက်ရှိ <b>နာမည်ဖြေရန်</b> ကိုနှိပ်ပြီး Character Name ကို ဖြည့်သွင်းပါ။
+- ကတ်ကျလာပါက ကတ်ကို Reply ပြန်ပြီး <code>.k</code> ရိုက်ပါ။ Character Name ပေါ်လာပါမည်။ ထို့နောက် <code>/mm [name]</code> ဖြင့် ကတ်ကိုဖမ်းပါ။
 - Leaderboard ကြည့်ရန် /ktop ကို အသုံးပြုပါ။
 
 <b>English</b>
 - Add the bot to your group.
 - Send messages in the group. A Character Card will drop automatically when the message limit is reached.
-- When a card drops, tap <b>နာမည်ဖြေရန်</b> and enter the character name.
+- When a card drops, reply to that card and type <code>.k</code> to reveal the character name. Then catch it using <code>/mm [name]</code>.
 - Use /ktop to view the leaderboard."""
 
     keyboard = InlineKeyboardMarkup([
@@ -1358,9 +1359,12 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
     if not context.args:
         return await msg.reply_text("Use: /mm character name", reply_to_message_id=msg.message_id)
-    requested = " ".join(context.args).strip().casefold()
-    found = next(((mid, d) for mid, d in reversed(list(active_card_drops.items()))
-                  if d['chat_id'] == chat.id), None)
+    requested = " ".join(" ".join(context.args).strip().split()).casefold()
+    pending_drop_id = pending_catch_targets.get((chat.id, user.id))
+    pending_drop = active_card_drops.get(pending_drop_id) if pending_drop_id else None
+    found = ((pending_drop_id, pending_drop) if pending_drop and pending_drop.get('chat_id') == chat.id else
+             next(((mid, d) for mid, d in reversed(list(active_card_drops.items()))
+                  if d['chat_id'] == chat.id), None))
     if not found:
         return await msg.reply_text("❄ No active character spawn right now.", reply_to_message_id=msg.message_id)
     drop_id, drop = found
@@ -1375,7 +1379,8 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if drop['ended'] or time.time() >= drop['expires_at']:
             return await msg.reply_text("⏰ Time is up. Please try again when the next card drops.", reply_to_message_id=msg.message_id)
         card = drop['card']
-        if requested != str(card['name']).casefold():
+        expected_name = " ".join(str(card['name']).strip().split()).casefold()
+        if requested != expected_name:
             return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
         try:
             async with db_pool.acquire() as conn:
@@ -1401,6 +1406,8 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"Error awarding spawned card: {e}")
             return await msg.reply_text("❌ Could not award this card. Please try again.", reply_to_message_id=msg.message_id)
         drop['winner_id'], drop['winner_name'], drop['ended'] = user.id, user.first_name, True
+        pending_catch_targets.pop((chat.id, user.id), None)
+
 
     # Winner animation: show 🪄 then ⭐ for 1.5 seconds each before the card result.
     animation_msg = None
@@ -1453,11 +1460,14 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    await asyncio.sleep(180)
     drop = active_card_drops.get(msg_id)
     if not drop:
         return
-    if drop['winner_id'] is None:
+    await asyncio.sleep(max(0, drop['expires_at'] - time.time()))
+    drop = active_card_drops.get(msg_id)
+    if not drop:
+        return
+    if time.time() >= drop['expires_at'] and drop['winner_id'] is None:
         drop['ended'] = True
         try:
             await context.bot.send_message(drop['chat_id'], '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။', reply_to_message_id=msg_id)
@@ -2373,6 +2383,7 @@ async def reveal_spawn_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     drop = active_card_drops[replied.message_id]
     if drop['ended'] or time.time() >= drop['expires_at']:
         return await msg.reply_text('⏰ Time is up. Please wait for the next card.', reply_to_message_id=msg.message_id)
+    pending_catch_targets[(msg.chat_id, update.effective_user.id)] = replied.message_id
     claim_command = f"/mm {drop['card']['name']}"
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Copy Name", copy_text=CopyTextButton(text=claim_command), style="success")]])
     return await msg.reply_text(
@@ -3949,11 +3960,9 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     caption_text = f"""🦋 <b>Here We Go Character Information !</b>
 
-🌵 <b>Collection name</b>
+🐞 <b>Collection Name</b>
 {col_name}
 ━━━━━━━━━━━━━━━━━━
-<b>Id - Name</b>
-<code>{card['card_id']}</code> - {card['name']}
 <b>[ {get_rarity_emoji(r)} · {r_display} ]</b>
 
 🌍 <b>GLOBAL DROP -</b> {global_drop_count}
