@@ -202,6 +202,12 @@ async def _init_db_once():
                 amount INT DEFAULT 1,
                 PRIMARY KEY (user_id, card_id)
             );
+            CREATE TABLE IF NOT EXISTS daily_spawn_claims (
+                user_id BIGINT,
+                claim_date DATE,
+                count INT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, claim_date)
+            );
             CREATE TABLE IF NOT EXISTS redeem_codes (
                 code TEXT PRIMARY KEY,
                 kachi BIGINT NOT NULL,
@@ -1238,7 +1244,7 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
     rarity_emoji = get_rarity_emoji(card.get('rarity') or 'Ten')
     caption = (f"{rarity_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
-               "📯 Fast to Catch 🐌 Use - /mm name")
+               "📯 Fast to Catch 🐌 Reply with .k or /k to reveal name")
     try:
         if card['type'] == 'photo':
             msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
@@ -1254,7 +1260,7 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
             chat_id=chat_id,
             message_id=msg.message_id,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("နာမည်ဖြေရန်", callback_data=f"kdropname_{msg.message_id}", style="danger")
+                InlineKeyboardButton("Use Reply With .k", callback_data="k_prompt_noop", style="primary")
             ]])
         )
     except Exception as e:
@@ -1313,7 +1319,15 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    # Spawn claims are unlimited; only /kshop has a 3-copy per-card cap.
+                    claim_date = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6, minutes=30)).date()
+                    daily_claim = await conn.fetchrow(
+                        """INSERT INTO daily_spawn_claims (user_id, claim_date, count) VALUES ($1, $2, 1)
+                           ON CONFLICT (user_id, claim_date) DO UPDATE SET count = daily_spawn_claims.count + 1
+                           WHERE daily_spawn_claims.count < 35 RETURNING count""",
+                        user.id, claim_date
+                    )
+                    if not daily_claim:
+                        return await msg.reply_text("⛔ You have reached today's 35 character catch limit. Please wait until tomorrow.", reply_to_message_id=msg.message_id)
                     await conn.execute(
                         """INSERT INTO user_cards (user_id, card_id, amount)
                            VALUES ($1, $2, 1)
@@ -2013,12 +2027,18 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile_text = "<blockquote>" + "\n".join(lines) + "</blockquote>"
 
     try:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=profile_text,
-            parse_mode="HTML",
-            reply_to_message_id=msg.message_id
-        )
+        profile_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
+        photos = await context.bot.get_user_profile_photos(user.id, limit=1)
+        if photos.total_count and photos.photos:
+            await context.bot.send_photo(
+                chat_id=chat.id, photo=photos.photos[0][-1].file_id, caption=profile_text,
+                parse_mode="HTML", reply_markup=profile_keyboard, reply_to_message_id=msg.message_id
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat.id, text=profile_text, parse_mode="HTML",
+                reply_markup=profile_keyboard, reply_to_message_id=msg.message_id
+            )
     except Exception as e:
         print(f"Could not send /kprofile in chat {chat.id} for {user.id}: {type(e).__name__}: {e}")
         try:
@@ -2130,7 +2150,7 @@ async def crest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global_default_threshold = 70
 
     async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE groups SET threshold = 70, msg_count = 0")
+        await conn.execute("UPDATE groups SET threshold = 95, msg_count = 0")
         await conn.execute("DELETE FROM settings WHERE key = 'default_threshold'")
 
     await update.message.reply_text("✅ All group thresholds and message counts have been reset to default (70). Card drops will only trigger when new message thresholds are met.", parse_mode="HTML", reply_to_message_id=msg_id)
@@ -2277,6 +2297,19 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML", reply_to_message_id=msg_id)
 
 @restricted_command
+async def reveal_spawn_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    replied = msg.reply_to_message if msg else None
+    if not replied or replied.message_id not in active_card_drops:
+        return await msg.reply_text("Reply to an active spawned card with .k or /k to reveal its name.", reply_to_message_id=msg.message_id)
+    drop = active_card_drops[replied.message_id]
+    if drop['ended'] or time.time() >= drop['expires_at']:
+        return await msg.reply_text('⏰ Time is up. Please wait for the next card.', reply_to_message_id=msg.message_id)
+    claim_command = f"/mm {drop['card']['name']}"
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Copy Name", copy_text=CopyTextButton(text=claim_command), style="success")]])
+    return await msg.reply_text(f"Character Name: <code>{html.escape(drop['card']['name'])}</code>", parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id)
+
+
 async def admin_coin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.message_id
     if update.effective_user.id != ADMIN_ID:
@@ -2308,7 +2341,7 @@ async def admin_coin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_message_id=msg_id
         )
     except (IndexError, ValueError):
-        await update.message.reply_text("❌ Usage: `/k [user_id] [amount]`", parse_mode="Markdown", reply_to_message_id=msg_id)
+        await update.message.reply_text("❌ Usage: `/kac [user_id] [amount]`", parse_mode="Markdown", reply_to_message_id=msg_id)
 
 @restricted_command
 async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4038,6 +4071,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     asyncio.create_task(register_user_group(user, chat, context))
 
+    if msg.text and msg.text.strip().lower() == ".k" and msg.reply_to_message:
+        if msg.reply_to_message.message_id in active_card_drops:
+            return await reveal_spawn_name(update, context)
+
     if chat.type == "private":
         has_pending = user.id in pending_kachi_transfers
         if has_pending:
@@ -4164,11 +4201,11 @@ Status: Successful ✅
                         ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, groups.title)
                     """, chat_id, chat.title or "Group")
                     
-                    threshold = 70
+                    threshold = 95
 
                     row = await conn.fetchrow("""
                         UPDATE groups 
-                        SET threshold = 70,
+                        SET threshold = 95,
                             msg_count = CASE WHEN msg_count + 1 >= $2 THEN 0 ELSE msg_count + 1 END
                         WHERE chat_id = $1
                         RETURNING msg_count, (msg_count = 0) AS should_drop
@@ -4617,6 +4654,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     asyncio.create_task(register_user_group(user, query.message.chat, context))
+
+    if data == "k_prompt_noop":
+        return await query.answer()
 
     if data.startswith("kdropname_"):
         try:
@@ -5540,7 +5580,8 @@ def main():
     app.add_handler(CommandHandler("glist", glist_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
-    app.add_handler(CommandHandler("k", admin_coin_cmd))
+    app.add_handler(CommandHandler("kac", admin_coin_cmd))
+    app.add_handler(CommandHandler("k", reveal_spawn_name))
     app.add_handler(CommandHandler("addadmin", addadmin_cmd))
     app.add_handler(CommandHandler("badmin", badmin_cmd))
     app.add_handler(CommandHandler("buy", buy_cmd))
