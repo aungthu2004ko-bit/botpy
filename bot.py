@@ -1244,7 +1244,7 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
     rarity_emoji = get_rarity_emoji(card.get('rarity') or 'Ten')
     caption = (f"{rarity_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
-               "📯 Fast to Catch 🐌 Reply with .k or /k to reveal name")
+               "📯 Fast to Catch 🐌 /mm name")
     try:
         if card['type'] == 'photo':
             msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
@@ -2307,7 +2307,10 @@ async def reveal_spawn_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await msg.reply_text('⏰ Time is up. Please wait for the next card.', reply_to_message_id=msg.message_id)
     claim_command = f"/mm {drop['card']['name']}"
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Copy Name", copy_text=CopyTextButton(text=claim_command), style="success")]])
-    return await msg.reply_text(f"Character Name: <code>{html.escape(drop['card']['name'])}</code>", parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id)
+    return await msg.reply_text(
+        f"Use This - <code>{claim_command}</code>",
+        parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id
+    )
 
 
 async def admin_coin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
