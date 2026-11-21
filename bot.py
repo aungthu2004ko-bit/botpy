@@ -58,7 +58,7 @@ kslot_cooldowns = {}
 kslot_is_cancelled = {}
 active_kslot_sessions = {}  # Track active/pending kslot sessions per user
 
-global_default_threshold = 95
+global_default_threshold = 70
 bot_warned_groups = set()
 
 # Anti-Spam Tracking Stores
@@ -174,7 +174,7 @@ async def _init_db_once():
                 title TEXT,
                 added_by_id BIGINT,
                 added_by_name TEXT,
-                threshold INT DEFAULT 95,
+                threshold INT DEFAULT 70,
                 msg_count INT DEFAULT 0,
                 admin_warned BOOLEAN DEFAULT FALSE
             );
@@ -236,8 +236,6 @@ async def _init_db_once():
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INT DEFAULT 0;")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_kg_win BIGINT DEFAULT 0;")
-            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_card_claim_count INT DEFAULT 0;")
-            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_card_claim_date DATE;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS added_by_id BIGINT;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS added_by_name TEXT;")
             await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS threshold INT DEFAULT 70;")
@@ -1256,7 +1254,7 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
             chat_id=chat_id,
             message_id=msg.message_id,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Use Reply With .k", callback_data="kdrop_reply_info", style="primary")
+                InlineKeyboardButton("နာမည်ဖြေရန်", callback_data=f"kdropname_{msg.message_id}", style="danger")
             ]])
         )
     except Exception as e:
@@ -1288,18 +1286,6 @@ async def spw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_character_spawn(context, chat.id, card, msg.message_id)
 
 
-async def reveal_replied_card_name(msg):
-    replied = msg.reply_to_message
-    if not replied or replied.message_id not in active_card_drops:
-        return False
-    drop = active_card_drops[replied.message_id]
-    if drop["ended"] or time.time() >= drop["expires_at"]:
-        await msg.reply_text("This card is no longer active.", reply_to_message_id=msg.message_id)
-        return True
-    await msg.reply_text(f"Character Name: {drop['card']['name']}", reply_to_message_id=msg.message_id)
-    return True
-
-
 @restricted_command
 async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
@@ -1325,43 +1311,15 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if requested != str(card['name']).casefold():
             return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
         try:
-            local_today = datetime.datetime.now(
-                datetime.timezone(datetime.timedelta(hours=6, minutes=30))
-            ).date()
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute(
-                        """INSERT INTO users (user_id, name, coins)
-                           VALUES ($1, $2, 1000)
-                           ON CONFLICT (user_id) DO NOTHING""",
-                        user.id, user.first_name or "User"
-                    )
-                    claim_row = await conn.fetchrow(
-                        """SELECT daily_card_claim_count, daily_card_claim_date
-                           FROM users WHERE user_id = $1 FOR UPDATE""",
-                        user.id
-                    )
-                    claim_count = int(claim_row["daily_card_claim_count"] or 0)
-                    claim_date = claim_row["daily_card_claim_date"]
-                    if claim_date != local_today:
-                        claim_count = 0
-                    if claim_count >= 35:
-                        return await msg.reply_text(
-                            "Daily card claim limit reached (35/35). Please collect cards again tomorrow.",
-                            reply_to_message_id=msg.message_id
-                        )
+                    # Spawn claims are unlimited; only /kshop has a 3-copy per-card cap.
                     await conn.execute(
                         """INSERT INTO user_cards (user_id, card_id, amount)
                            VALUES ($1, $2, 1)
                            ON CONFLICT (user_id, card_id)
                            DO UPDATE SET amount = user_cards.amount + 1""",
                         user.id, card['card_id']
-                    )
-                    await conn.execute(
-                        """UPDATE users
-                           SET daily_card_claim_count = $1, daily_card_claim_date = $2
-                           WHERE user_id = $3""",
-                        claim_count + 1, local_today, user.id
                     )
                     await check_and_auto_lock_card(conn, card['card_id'])
         except Exception as e:
@@ -2059,10 +2017,6 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=chat.id,
             text=profile_text,
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Telegram Profile", url=f"tg://user?id={user.id}", style="primary")],
-                [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{user.id}", style="success")]
-            ]),
             reply_to_message_id=msg.message_id
         )
     except Exception as e:
@@ -2173,10 +2127,10 @@ async def crest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     global global_default_threshold
     group_threshold.clear()
-    global_default_threshold = 95
+    global_default_threshold = 70
 
     async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE groups SET threshold = 95, msg_count = 0")
+        await conn.execute("UPDATE groups SET threshold = 70, msg_count = 0")
         await conn.execute("DELETE FROM settings WHERE key = 'default_threshold'")
 
     await update.message.reply_text("✅ All group thresholds and message counts have been reset to default (70). Card drops will only trigger when new message thresholds are met.", parse_mode="HTML", reply_to_message_id=msg_id)
@@ -2325,8 +2279,6 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted_command
 async def admin_coin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.message_id
-    if update.message.reply_to_message and await reveal_replied_card_name(update.message):
-        return
     if update.effective_user.id != ADMIN_ID:
         return
 
@@ -3684,10 +3636,7 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                         title=title,
                         description=description,
                         caption=caption,
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{target_id}", style="success")
-                        ]])
+                        parse_mode="HTML"
                     )
                 )
             else:
@@ -3698,10 +3647,7 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                         title=title,
                         description=description,
                         caption=caption,
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{target_id}", style="success")
-                        ]])
+                        parse_mode="HTML"
                     )
                 )
 
@@ -4092,10 +4038,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     asyncio.create_task(register_user_group(user, chat, context))
 
-    if msg.text and msg.text.strip().lower() == ".k":
-        if await reveal_replied_card_name(msg):
-            return
-
     if chat.type == "private":
         has_pending = user.id in pending_kachi_transfers
         if has_pending:
@@ -4222,11 +4164,11 @@ Status: Successful ✅
                         ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, groups.title)
                     """, chat_id, chat.title or "Group")
                     
-                    threshold = 95
+                    threshold = 70
 
                     row = await conn.fetchrow("""
                         UPDATE groups 
-                        SET threshold = 95,
+                        SET threshold = 70,
                             msg_count = CASE WHEN msg_count + 1 >= $2 THEN 0 ELSE msg_count + 1 END
                         WHERE chat_id = $1
                         RETURNING msg_count, (msg_count = 0) AS should_drop
@@ -4676,8 +4618,50 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     asyncio.create_task(register_user_group(user, query.message.chat, context))
 
-    if data == "kdrop_reply_info":
-        return await query.answer("Reply to this card with .k or /k to reveal its name.", show_alert=True)
+    if data.startswith("kdropname_"):
+        try:
+            drop_id = int(data.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return await query.answer("This card is no longer available.", show_alert=True)
+
+        drop = active_card_drops.get(drop_id)
+        if not drop or drop["chat_id"] != chat_id:
+            return await query.answer("⏰ Time is up. Please wait for the next card.", show_alert=True)
+
+        lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
+        async with lock:
+            if drop["winner_id"] is not None:
+                winner = get_mention(drop["winner_id"], drop["winner_name"] or "Winner")
+                return await query.answer(
+                    f"Too Late 😭 {drop['winner_name'] or 'Winner'} got it first. Try next time.",
+                    show_alert=True
+                )
+            if drop["ended"] or time.time() >= drop["expires_at"]:
+                return await query.answer("⏰ Time is up. Please wait for the next card.", show_alert=True)
+            if drop.get("name_button_used"):
+                return await query.answer("The character name has already been requested.", show_alert=True)
+            drop["name_button_used"] = True
+
+            claim_command = f"/mm {drop['card']['name']}"
+            copy_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "📋 Copy Name",
+                    copy_text=CopyTextButton(text=claim_command)
+                , style="primary")
+            ]])
+            await query.answer("The character name has been sent.")
+            try:
+                await context.bot.send_message(
+                    chat_id,
+                    f"Use This - <code>{claim_command}</code>",
+                    parse_mode="HTML",
+                    reply_markup=copy_markup,
+                    reply_to_message_id=drop_id
+                )
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception as e:
+                print(f"Could not send spawned card name: {e}")
+        return
 
     if data.startswith("kslot_bet_"):
         parts = data.split("_")
