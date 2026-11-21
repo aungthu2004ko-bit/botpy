@@ -23,6 +23,111 @@ from telegram.ext import (
     ApplicationHandlerStop,
 )
 
+# ===================== NOVA DARK TERMINAL UI (ALL COMMAND REPLIES) =====================
+# UI-only presentation wrappers. They preserve existing text, parse_mode, reply_markup,
+# callbacks, media, and business logic. They decorate message text/captions safely.
+_UI_MARK = "𝗡𝗢𝗩𝗔 • CARD SYSTEM"
+_UI_TOP = "╭━━〔 𝗡𝗢𝗩𝗔 • CARD SYSTEM 〕━━╮\n"
+_UI_BOTTOM = "\n╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+_UI_COMMAND_TITLES = {
+    "start":"WELCOME / START", "pre":"CARD DROP", "kc":"KACHI CHECK",
+    "kprofile":"PLAYER PROFILE", "khmode":"HUNT MODE", "resethmode":"MODE RESET",
+    "mm":"MAIN MENU", "kname":"NAME SETTINGS", "kachi":"KACHI WALLET",
+    "myre":"REDEEM STATUS", "kslot":"SLOT GAME", "kbox":"KBOX GAME",
+    "kdaily":"DAILY REWARD", "set":"CARD SETUP", "kgift":"CARD GIFT",
+    "rngift":"RANDOM GIFT", "card":"CARD DETAILS", "ktop":"TOP PLAYERS",
+    "kgtop":"CARD RANKING", "ksearch":"CARD SEARCH", "rede":"REDEEM",
+    "aa":"ADMIN ACTION", "send":"QUIZ / SEND", "kcode":"CODE MANAGER",
+    "kclist":"CARD LIST", "cardlist":"CARD CATALOG", "seelock":"LOCK STATUS",
+    "admin":"ADMIN PANEL", "crest":"CARD CREST", "kcreset":"RESET ACTION",
+    "glist":"GROUP LIST", "stats":"BOT STATISTICS", "broadcast":"BROADCAST",
+    "kac":"COIN MANAGEMENT", "k":"SPAWN DETAILS", "addadmin":"ADMIN ACCESS",
+    "badmin":"ADMIN CONTROL", "buy":"CARD PURCHASE", "got":"CARD RESULT",
+    "add":"ADD CARD", "unlock":"UNLOCK CARD", "lock":"LOCK CARD",
+    "spw":"SPAWN CONTROL", "tg":"GAME START", "stoptg":"GAME STOP",
+    "del":"DELETE CARD", "check":"USER CHECK", "reset3x":"RESET TOOL",
+    "fixcard":"CARD REPAIR", "ttcard":"CARD REPAIR", "mute":"MUTE USER",
+    "ban":"BAN USER", "umute":"UNMUTE USER", "unban":"UNBAN USER"
+}
+def _ui_title_from_message(message):
+    try:
+        text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+        m = re.match(r"^/([A-Za-z0-9_]+)", text)
+        if m:
+            return _UI_COMMAND_TITLES.get(m.group(1).lower(), "BOT RESPONSE")
+    except Exception:
+        pass
+    return "BOT RESPONSE"
+def _ui_wrap(value, title="BOT RESPONSE", limit=3900):
+    if not isinstance(value, str) or not value.strip() or _UI_MARK in value:
+        return value
+    framed = _UI_TOP + "▸ " + title + "\n━━━━━━━━━━━━━━━━━━━━\n" + value + _UI_BOTTOM
+    # Telegram text/caption limits: avoid wrapping if it would exceed them.
+    return framed if len(framed) <= limit else value
+
+try:
+    from telegram import Message, Bot
+    _orig_msg_reply_text = Message.reply_text
+    async def _ui_reply_text(self, text, *args, **kwargs):
+        return await _orig_msg_reply_text(self, _ui_wrap(text, _ui_title_from_message(self)), *args, **kwargs)
+    Message.reply_text = _ui_reply_text
+
+    _orig_msg_reply_photo = Message.reply_photo
+    async def _ui_reply_photo(self, *args, **kwargs):
+        title = _ui_title_from_message(self)
+        if "caption" in kwargs:
+            kwargs["caption"] = _ui_wrap(kwargs["caption"], title, limit=950)
+        elif len(args) > 1 and isinstance(args[1], str):
+            args = (args[0], _ui_wrap(args[1], title, limit=950)) + args[2:]
+        return await _orig_msg_reply_photo(self, *args, **kwargs)
+    Message.reply_photo = _ui_reply_photo
+
+
+    _orig_bot_send_message = Bot.send_message
+    async def _ui_send_message(self, *args, **kwargs):
+        if "text" in kwargs:
+            kwargs["text"] = _ui_wrap(kwargs["text"], "BOT MESSAGE")
+        elif len(args) > 1 and isinstance(args[1], str): # positional: chat_id, text
+            args = (args[0], _ui_wrap(args[1], "BOT MESSAGE")) + args[2:]
+        return await _orig_bot_send_message(self, *args, **kwargs)
+    Bot.send_message = _ui_send_message
+
+    _orig_bot_send_photo = Bot.send_photo
+    async def _ui_send_photo(self, *args, **kwargs):
+        if "caption" in kwargs:
+            kwargs["caption"] = _ui_wrap(kwargs["caption"], "BOT MEDIA", limit=950)
+        elif len(args) > 2 and isinstance(args[2], str): # positional: chat_id, photo, caption
+            args = args[:2] + (_ui_wrap(args[2], "BOT MEDIA", limit=950),) + args[3:]
+        return await _orig_bot_send_photo(self, *args, **kwargs)
+    Bot.send_photo = _ui_send_photo
+
+    _orig_msg_edit_text = Message.edit_text
+    async def _ui_edit_text(self, text, *args, **kwargs):
+        return await _orig_msg_edit_text(self, _ui_wrap(text, _ui_title_from_message(self)), *args, **kwargs)
+    Message.edit_text = _ui_edit_text
+
+    _orig_bot_edit_text = Bot.edit_message_text
+    async def _ui_bot_edit_text(self, *args, **kwargs):
+        if "text" in kwargs:
+            kwargs["text"] = _ui_wrap(kwargs["text"], "UPDATED MESSAGE")
+        elif args and isinstance(args[0], str): # positional: text, chat_id, message_id
+            args = (_ui_wrap(args[0], "UPDATED MESSAGE"),) + args[1:]
+        return await _orig_bot_edit_text(self, *args, **kwargs)
+    Bot.edit_message_text = _ui_bot_edit_text
+
+    _orig_bot_edit_caption = Bot.edit_message_caption
+    async def _ui_bot_edit_caption(self, *args, **kwargs):
+        if "caption" in kwargs:
+            kwargs["caption"] = _ui_wrap(kwargs["caption"], "UPDATED MEDIA", limit=950)
+        elif args and isinstance(args[0], str): # positional caption, chat_id, message_id
+            args = (_ui_wrap(args[0], "UPDATED MEDIA", limit=950),) + args[1:]
+        return await _orig_bot_edit_caption(self, *args, **kwargs)
+    Bot.edit_message_caption = _ui_bot_edit_caption
+except ImportError:
+    pass
+# ===================== END NOVA UI THEME =====================
+
+
 # Environment Variables
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7940553702"))
