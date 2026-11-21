@@ -9,7 +9,7 @@ import datetime
 import html
 import uuid
 import asyncpg
-from telegram import InlineKeyboardButton as _TelegramInlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
 from telegram.error import TelegramError, NetworkError, TimedOut
 from telegram.ext import (
     Application,
@@ -21,38 +21,6 @@ from telegram.ext import (
     InlineQueryHandler,
     BaseUpdateProcessor,
 )
-
-# Apply Telegram's native inline-button colors without changing button text,
-# callback data, URLs, layout, or any bot/game logic.
-def InlineKeyboardButton(*args, **kwargs):
-    if "style" not in kwargs:
-        button_text = kwargs.get("text", args[0] if args else "")
-        label = str(button_text).casefold()
-
-        danger_words = ("cancel", "delete", "remove", "decline", "reject", "close")
-        success_words = (
-            "confirm", "buy", "purchase", "joined", "open", "claim", "add",
-            "spin", "all in", "bet", "send", "accept", "collect", "gift",
-            "ဝယ်မည်", "အတည်ပြု", "လောင်းမယ်", "ဖမ်းမယ်",
-        )
-
-        if any(word in label for word in danger_words):
-            kwargs["style"] = "danger"   # red
-        elif any(word in label for word in success_words):
-            kwargs["style"] = "success" # green
-        else:
-            kwargs["style"] = "primary" # blue
-
-    try:
-        return _TelegramInlineKeyboardButton(*args, **kwargs)
-    except TypeError as exc:
-        # Older python-telegram-bot versions do not expose the Bot API style field.
-        # Keep the bot functional; upgrading to PTB 22.7+ enables the colors.
-        if "style" in kwargs and "style" in str(exc):
-            fallback_kwargs = dict(kwargs)
-            fallback_kwargs.pop("style", None)
-            return _TelegramInlineKeyboardButton(*args, **fallback_kwargs)
-        raise
 
 # Environment Variables
 TOKEN = os.getenv("BOT_TOKEN")
@@ -661,8 +629,8 @@ async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not missing:
         return True
 
-    keyboard_rows = [[InlineKeyboardButton(label, url=url)] for label, url in missing]
-    keyboard_rows.append([InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}")])
+    keyboard_rows = [[InlineKeyboardButton(label, url=url, style="primary")] for label, url in missing]
+    keyboard_rows.append([InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}", style="success")])
     text = (
         f"🐠 Hello {get_mention(user.id, user.first_name)}, "
         "please join our channel and main group to use the bot 🩸"
@@ -701,7 +669,7 @@ async def check_main_group_restriction(update: Update, context: ContextTypes.DEF
                 "အဲ့ဒီ command တွေကိုတော့ ဒီGroupမှာပဲ လာဖောက်ပေးပါနော် ✨"
             )
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Main Group 🏰", url=MAIN_GROUP_LINK)]
+                [InlineKeyboardButton("Main Group 🏰", url=MAIN_GROUP_LINK, style="primary")]
             ])
             try:
                 await msg.reply_text(restriction_text, reply_markup=keyboard, reply_to_message_id=msg.message_id)
@@ -808,7 +776,7 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ❄Check /kc ❄"""
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{user.id}")]
+        [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{user.id}", style="success")]
     ])
 
     if card['type'] == 'photo':
@@ -859,11 +827,11 @@ async def aa_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = []
     for idx, opt in enumerate(options):
-        keyboard.append([InlineKeyboardButton(f"📌 {opt}", callback_data="aa_noop")])
+        keyboard.append([InlineKeyboardButton(f"📌 {opt}", callback_data="aa_noop", style="primary")])
     
     select_row = []
     for idx, opt in enumerate(options):
-        select_row.append(InlineKeyboardButton(f"✅ အဖြေမှန် ({idx+1})", callback_data=f"aa_sel_{idx}"))
+        select_row.append(InlineKeyboardButton(f"✅ အဖြေမှန် ({idx+1})", callback_data=f"aa_sel_{idx}", style="primary"))
     keyboard.append(select_row)
 
     sent = await msg.reply_text(preview_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), reply_to_message_id=msg.message_id)
@@ -918,7 +886,7 @@ async def send_quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             keyboard = []
             for idx, opt in enumerate(quiz_data['options']):
-                keyboard.append([InlineKeyboardButton(opt, callback_data=f"ans_{quiz_id}_{idx}")])
+                keyboard.append([InlineKeyboardButton(opt, callback_data=f"ans_{quiz_id}_{idx}", style="primary")])
 
             quiz_text = f"❓ <b>Kachi Trivia Quiz</b>\n\n<b>{quiz_data['question']}</b>"
 
@@ -1040,11 +1008,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Help 📖", callback_data="menu_help"),
-            InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift")
+            InlineKeyboardButton("Help 📖", callback_data="menu_help", style="primary"),
+            InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift", style="primary")
         ],
         [
-            InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true")
+            InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true", style="success")
         ]
     ])
 
@@ -1076,7 +1044,7 @@ My Referral Link : <code>{ref_link}</code>
 Kachi Balance : {coins}"""
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Share Link 🔗", url=f"https://t.me/share/url?url={ref_link}&text=Join%20Kachi%20Card%20Game%20Bot%20and%20collect%20cards!")]
+        [InlineKeyboardButton("Share Link 🔗", url=f"https://t.me/share/url?url={ref_link}&text=Join%20Kachi%20Card%20Game%20Bot%20and%20collect%20cards!", style="primary")]
     ])
 
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
@@ -1286,7 +1254,7 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
             chat_id=chat_id,
             message_id=msg.message_id,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("နာမည်ဖြေရန်", callback_data=f"kdropname_{msg.message_id}")
+                InlineKeyboardButton("နာမည်ဖြေရန်", callback_data=f"kdropname_{msg.message_id}", style="danger")
             ]])
         )
     except Exception as e:
@@ -1380,7 +1348,7 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
                f"❀Cᴀʀᴅ - {card['name']}\n         ✿ {card['card_id']}\n"
                f"❀RARITY - {rarity}\n      ✿ {collection}")
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}')]])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
     try:
         if card['type'] == 'photo':
             await context.bot.send_photo(chat.id, card['file_id'], caption=caption, parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id)
@@ -1401,7 +1369,7 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await msg.reply_text('⏰ Time is up. Please try again when the next card drops.', reply_to_message_id=msg.message_id)
     claim_command = f"/mm {drop['card']['name']}"
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command))
+        InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command), style="success")
     ]])
     return await msg.reply_text(
         f"Use This - <code>{claim_command}</code>",
@@ -1581,7 +1549,7 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <i>Click the button below to confirm.</i>"""
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("ဝယ်မည် ✅", callback_data=f"buy_confirm_{user.id}_{seller_id}")
+        InlineKeyboardButton("ဝယ်မည် ✅", callback_data=f"buy_confirm_{user.id}_{seller_id}", style="success")
     ]])
 
     sent_msg = await msg.reply_text(buy_text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
@@ -1710,9 +1678,9 @@ async def render_kclist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE
     buttons = []
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"kclist_{page - 1}"))
+        nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"kclist_{page - 1}", style="primary"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"kclist_{page + 1}"))
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"kclist_{page + 1}", style="primary"))
     if nav_row:
         buttons.append(nav_row)
 
@@ -2132,7 +2100,7 @@ async def check_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_text = f"{text_header}\n\n❄ <b>Owned Cards</b>\n\n{cards_info}"
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{target_id}")]
+        [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{target_id}", style="success")]
     ])
 
     active_card = None
@@ -2592,25 +2560,25 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Other Card Admins can only add up to Kryora
     keyboard_rows = [
         [
-            InlineKeyboardButton("🦠 Kryora", callback_data=f"addrarity_{user.id}_Kryora"),
-            InlineKeyboardButton("🎐 Yugen", callback_data=f"addrarity_{user.id}_Yugen")
+            InlineKeyboardButton("🦠 Kryora", callback_data=f"addrarity_{user.id}_Kryora", style="primary"),
+            InlineKeyboardButton("🎐 Yugen", callback_data=f"addrarity_{user.id}_Yugen", style="primary")
         ],
         [
-            InlineKeyboardButton("🧬 Shinsei", callback_data=f"addrarity_{user.id}_Shinsei"),
-            InlineKeyboardButton("🪞 Kiwami", callback_data=f"addrarity_{user.id}_Kiwami")
+            InlineKeyboardButton("🧬 Shinsei", callback_data=f"addrarity_{user.id}_Shinsei", style="primary"),
+            InlineKeyboardButton("🪞 Kiwami", callback_data=f"addrarity_{user.id}_Kiwami", style="primary")
         ],
         [
-            InlineKeyboardButton("✨ Kami", callback_data=f"addrarity_{user.id}_Kami"),
-            InlineKeyboardButton("⚜️ Hoshi", callback_data=f"addrarity_{user.id}_Hoshi")
+            InlineKeyboardButton("✨ Kami", callback_data=f"addrarity_{user.id}_Kami", style="primary"),
+            InlineKeyboardButton("⚜️ Hoshi", callback_data=f"addrarity_{user.id}_Hoshi", style="primary")
         ],
         [
-            InlineKeyboardButton("💮 Ten", callback_data=f"addrarity_{user.id}_Ten")
+            InlineKeyboardButton("💮 Ten", callback_data=f"addrarity_{user.id}_Ten", style="primary")
         ]
     ]
     if user.id == ADMIN_ID:
-        keyboard_rows.insert(0, [InlineKeyboardButton("♠ Beyond", callback_data=f"addrarity_{user.id}_Beyond")])
-        keyboard_rows.insert(1, [InlineKeyboardButton("📓 Raiden", callback_data=f"addrarity_{user.id}_Raiden")])
-        keyboard_rows.insert(2, [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"addrarity_{user.id}_Birthday Special")])
+        keyboard_rows.insert(0, [InlineKeyboardButton("♠ Beyond", callback_data=f"addrarity_{user.id}_Beyond", style="primary")])
+        keyboard_rows.insert(1, [InlineKeyboardButton("📓 Raiden", callback_data=f"addrarity_{user.id}_Raiden", style="primary")])
+        keyboard_rows.insert(2, [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"addrarity_{user.id}_Birthday Special", style="primary")])
 
     await update.message.reply_text(
         f"🎴 <b>Card Info Ready:</b>\n"
@@ -2855,24 +2823,24 @@ async def khmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond"),
-            InlineKeyboardButton("🎀 Birthday Special", callback_data=f"khset_{user.id}_Birthday Special")
+            InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond", style="primary"),
+            InlineKeyboardButton("🎀 Birthday Special", callback_data=f"khset_{user.id}_Birthday Special", style="primary")
         ],
         [
-            InlineKeyboardButton("📓 Raiden", callback_data=f"khset_{user.id}_Raiden"),
-            InlineKeyboardButton("🦠 Kryora", callback_data=f"khset_{user.id}_Kryora")
+            InlineKeyboardButton("📓 Raiden", callback_data=f"khset_{user.id}_Raiden", style="primary"),
+            InlineKeyboardButton("🦠 Kryora", callback_data=f"khset_{user.id}_Kryora", style="primary")
         ],
         [
-            InlineKeyboardButton("🎐 Yugen", callback_data=f"khset_{user.id}_Yugen"),
-            InlineKeyboardButton("🧬 Shinsei", callback_data=f"khset_{user.id}_Shinsei")
+            InlineKeyboardButton("🎐 Yugen", callback_data=f"khset_{user.id}_Yugen", style="primary"),
+            InlineKeyboardButton("🧬 Shinsei", callback_data=f"khset_{user.id}_Shinsei", style="primary")
         ],
         [
-            InlineKeyboardButton("🪞 Kiwami", callback_data=f"khset_{user.id}_Kiwami"),
-            InlineKeyboardButton("✨ Kami", callback_data=f"khset_{user.id}_Kami")
+            InlineKeyboardButton("🪞 Kiwami", callback_data=f"khset_{user.id}_Kiwami", style="primary"),
+            InlineKeyboardButton("✨ Kami", callback_data=f"khset_{user.id}_Kami", style="primary")
         ],
         [
-            InlineKeyboardButton("⚜️ Hoshi", callback_data=f"khset_{user.id}_Hoshi"),
-            InlineKeyboardButton("💮 Ten", callback_data=f"khset_{user.id}_Ten")
+            InlineKeyboardButton("⚜️ Hoshi", callback_data=f"khset_{user.id}_Hoshi", style="primary"),
+            InlineKeyboardButton("💮 Ten", callback_data=f"khset_{user.id}_Ten", style="primary")
         ]
     ])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
@@ -2906,15 +2874,15 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🎀 Birthday Special", callback_data=f"kshop_rarity_{user.id}_Birthday Special"),
-            InlineKeyboardButton("🎐 Yugen", callback_data=f"kshop_rarity_{user.id}_Yugen")
+            InlineKeyboardButton("🎀 Birthday Special", callback_data=f"kshop_rarity_{user.id}_Birthday Special", style="primary"),
+            InlineKeyboardButton("🎐 Yugen", callback_data=f"kshop_rarity_{user.id}_Yugen", style="primary")
         ],
         [
-            InlineKeyboardButton("🧬 Shinsei", callback_data=f"kshop_rarity_{user.id}_Shinsei"),
-            InlineKeyboardButton("🪞 Kiwami", callback_data=f"kshop_rarity_{user.id}_Kiwami")
+            InlineKeyboardButton("🧬 Shinsei", callback_data=f"kshop_rarity_{user.id}_Shinsei", style="primary"),
+            InlineKeyboardButton("🪞 Kiwami", callback_data=f"kshop_rarity_{user.id}_Kiwami", style="primary")
         ],
         [
-            InlineKeyboardButton("✨ Kami", callback_data=f"kshop_rarity_{user.id}_Kami")
+            InlineKeyboardButton("✨ Kami", callback_data=f"kshop_rarity_{user.id}_Kami", style="primary")
         ]
     ])
     await msg.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
@@ -2967,17 +2935,17 @@ async def render_kshop_card(query, context, user_id, rarity, index):
     keyboard_rows = []
     nav_row = []
     if index > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"kshop_nav_{user_id}_{rarity}_{index - 1}"))
+        nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"kshop_nav_{user_id}_{rarity}_{index - 1}", style="primary"))
     if index < len(cards) - 1:
-        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"kshop_nav_{user_id}_{rarity}_{index + 1}"))
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"kshop_nav_{user_id}_{rarity}_{index + 1}", style="primary"))
     if nav_row:
         keyboard_rows.append(nav_row)
 
     keyboard_rows.append([
-        InlineKeyboardButton("Buy This Card", callback_data=f"kshop_buy_{user_id}_{rarity}_{card['card_id']}_{price}")
+        InlineKeyboardButton("Buy This Card", callback_data=f"kshop_buy_{user_id}_{rarity}_{card['card_id']}_{price}", style="success")
     ])
     keyboard_rows.append([
-        InlineKeyboardButton("◀️ Back Menu", callback_data=f"kshop_back_{user_id}")
+        InlineKeyboardButton("◀️ Back Menu", callback_data=f"kshop_back_{user_id}", style="primary")
     ])
     markup = InlineKeyboardMarkup(keyboard_rows)
 
@@ -3037,8 +3005,8 @@ async def kgift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <i>Click button below to confirm.</i>"""
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Cancel ❌", callback_data=f"gift_cancel_{sender.id}"),
-        InlineKeyboardButton("Confirm Gift 🎁", callback_data=f"gift_confirm_{sender.id}")
+        InlineKeyboardButton("Cancel ❌", callback_data=f"gift_cancel_{sender.id}", style="danger"),
+        InlineKeyboardButton("Confirm Gift 🎁", callback_data=f"gift_confirm_{sender.id}", style="success")
     ]])
 
     if card['type'] == 'photo':
@@ -3199,7 +3167,7 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
         full_text = f"{text_header}\n\nCollection\n<i>No cards found.</i>"
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(f"Harem❄ ({total_owned_sum})", switch_inline_query_current_chat=f"harem.{target_id}")
+                InlineKeyboardButton(f"Harem❄ ({total_owned_sum})", switch_inline_query_current_chat=f"harem.{target_id}", style="success")
             ]
         ])
         if isinstance(update_or_query, Update):
@@ -3240,14 +3208,14 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     if total_pages > 1:
         nav_row = []
         if page > 0:
-            nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"kcpage_{page - 1}_{target_id}"))
+            nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"kcpage_{page - 1}_{target_id}", style="primary"))
         if page < total_pages - 1:
-            nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"kcpage_{page + 1}_{target_id}"))
+            nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"kcpage_{page + 1}_{target_id}", style="primary"))
         if nav_row:
             keyboard_rows.append(nav_row)
 
     keyboard_rows.append([
-        InlineKeyboardButton(f"Harem❄ ({total_owned_sum})", switch_inline_query_current_chat=f"harem.{target_id}")
+        InlineKeyboardButton(f"Harem❄ ({total_owned_sum})", switch_inline_query_current_chat=f"harem.{target_id}", style="success")
     ])
     markup = InlineKeyboardMarkup(keyboard_rows)
 
@@ -3296,7 +3264,7 @@ async def kachi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_info = await context.bot.get_me()
     text = f"Name : {display_name}\nKachi Balance : {kachi_amount}\nUser ID : <code>{target_id}</code>"
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Send Kachi", url=f"https://t.me/{bot_info.username}?start=kachi_{target_id}")]
+        [InlineKeyboardButton(f"Send Kachi", url=f"https://t.me/{bot_info.username}?start=kachi_{target_id}", style="success")]
     ])
     
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
@@ -3342,14 +3310,14 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard_rows = []
     row = []
     for amt in amounts:
-        row.append(InlineKeyboardButton(f"{amt} Kachi 🩸", callback_data=f"kslot_bet_{user.id}_{amt}"))
+        row.append(InlineKeyboardButton(f"{amt} Kachi 🩸", callback_data=f"kslot_bet_{user.id}_{amt}", style="primary"))
         if len(row) == 2:
             keyboard_rows.append(row)
             row = []
     if row:
         keyboard_rows.append(row)
     
-    keyboard_rows.append([InlineKeyboardButton("🔥 All In 🩸", callback_data=f"kslot_bet_{user.id}_allin")])
+    keyboard_rows.append([InlineKeyboardButton("🔥 All In 🩸", callback_data=f"kslot_bet_{user.id}_allin", style="success")])
 
     text = f"""🎰 <b>Kachi Slot Machine Game</b>
 
@@ -3528,7 +3496,7 @@ async def kbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "Welcome To Kbox 💤\nLet's Open 🔫 (Cost: 1000 Kachi)"
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("OPEN", callback_data=f"kbox_open_{user.id}")]
+        [InlineKeyboardButton("OPEN", callback_data=f"kbox_open_{user.id}", style="success")]
     ])
     await msg.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
 
@@ -3543,7 +3511,7 @@ async def ksearch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "🔍 <b>Global Card Search (Ksearch)</b>\n\nClick the button below to browse all cards available in the bot database:"
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Global Search 🔎", switch_inline_query_current_chat="ksearch")]
+        [InlineKeyboardButton("Global Search 🔎", switch_inline_query_current_chat="ksearch", style="primary")]
     ])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg_id)
 
@@ -3739,9 +3707,9 @@ async def render_seelock_page(update_or_query, context: ContextTypes.DEFAULT_TYP
 
     buttons = []
     if page > 0:
-        buttons.append(InlineKeyboardButton("◀️ Back", callback_data=f"seelock_{page - 1}_{owner_id}"))
+        buttons.append(InlineKeyboardButton("◀️ Back", callback_data=f"seelock_{page - 1}_{owner_id}", style="primary"))
     if page < total_pages - 1:
-        buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"seelock_{page + 1}_{owner_id}"))
+        buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"seelock_{page + 1}_{owner_id}", style="primary"))
 
     markup = InlineKeyboardMarkup([buttons]) if buttons else None
 
@@ -3793,9 +3761,9 @@ async def render_cardlist_page(update_or_query, context: ContextTypes.DEFAULT_TY
 
     buttons = []
     if page > 0:
-        buttons.append(InlineKeyboardButton("◀️ Back", callback_data=f"clist_{page - 1}_{owner_id}"))
+        buttons.append(InlineKeyboardButton("◀️ Back", callback_data=f"clist_{page - 1}_{owner_id}", style="primary"))
     if page < total_pages - 1:
-        buttons.append(InlineKeyboardButton("Next ▶", callback_data=f"clist_{page + 1}_{owner_id}"))
+        buttons.append(InlineKeyboardButton("Next ▶", callback_data=f"clist_{page + 1}_{owner_id}", style="primary"))
 
     markup = InlineKeyboardMarkup([buttons]) if buttons else None
 
@@ -3976,9 +3944,9 @@ async def render_glist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE,
     buttons = []
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"glist_{page - 1}"))
+        nav_row.append(InlineKeyboardButton("◀️ Back", callback_data=f"glist_{page - 1}", style="primary"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"glist_{page + 1}"))
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"glist_{page + 1}", style="primary"))
     if nav_row:
         buttons.append(nav_row)
 
@@ -4325,8 +4293,8 @@ TG_CARD_RANKS = (("A", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5),
 def tg_game_keyboard(round_id, bot_username):
     # Deep links open the bot DM directly; start payload selects the side.
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🐅  ကျား (T) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_T"),
-        InlineKeyboardButton("🐉  နဂါး (D) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_D")
+        InlineKeyboardButton("🐅  ကျား (T) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_T", style="success"),
+        InlineKeyboardButton("🐉  နဂါး (D) လောင်းမယ်", url=f"https://t.me/{bot_username}?start=tg_{round_id}_D", style="success")
     ]])
 
 
@@ -4622,7 +4590,7 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         f"━━━━━━━━━━━━━━━━━━\n"
         "ပွဲရလဒ်ကို Channel မှာ ကြည့်နိုင်ပါတယ်။",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📣 Channel ကို ပြန်သွားမယ်", url="https://t.me/beyondpoe")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📣 Channel ကို ပြန်သွားမယ်", url="https://t.me/beyondpoe", style="primary")]])
     )
     try:
         bot_info = await context.bot.get_me()
@@ -4679,7 +4647,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton(
                     "📋 Copy Name",
                     copy_text=CopyTextButton(text=claim_command)
-                )
+                , style="primary")
             ]])
             await query.answer("The character name has been sent.")
             try:
@@ -4724,8 +4692,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Spin 🎰", callback_data=f"kslot_spin_{user.id}_{bet_amount}"),
-                InlineKeyboardButton("Cancel ❌", callback_data=f"kslot_cancel_{user.id}")
+                InlineKeyboardButton("Spin 🎰", callback_data=f"kslot_spin_{user.id}_{bet_amount}", style="success"),
+                InlineKeyboardButton("Cancel ❌", callback_data=f"kslot_cancel_{user.id}", style="danger")
             ]
         ])
 
@@ -4902,11 +4870,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         confirm_text = f"Are You Sure To Set This Rarity On Kc\n\n📌 Selected Rarity: {get_rarity_display(rarity)}"
         confirm_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Cancel ❌", callback_data=f"khcancel_{user.id}"),
-                InlineKeyboardButton("Confirm ✅", callback_data=f"khconfirm_{user.id}_{rarity}")
+                InlineKeyboardButton("Cancel ❌", callback_data=f"khcancel_{user.id}", style="danger"),
+                InlineKeyboardButton("Confirm ✅", callback_data=f"khconfirm_{user.id}_{rarity}", style="success")
             ],
             [
-                InlineKeyboardButton("◀️ Back Menu", callback_data=f"khback_{user.id}")
+                InlineKeyboardButton("◀️ Back Menu", callback_data=f"khback_{user.id}", style="primary")
             ]
         ])
         try:
@@ -4935,24 +4903,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond"),
-                InlineKeyboardButton("🎀 Birthday Special", callback_data=f"khset_{user.id}_Birthday Special")
+                InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond", style="primary"),
+                InlineKeyboardButton("🎀 Birthday Special", callback_data=f"khset_{user.id}_Birthday Special", style="primary")
             ],
             [
-                InlineKeyboardButton("📓 Raiden", callback_data=f"khset_{user.id}_Raiden"),
-                InlineKeyboardButton("🦠 Kryora", callback_data=f"khset_{user.id}_Kryora")
+                InlineKeyboardButton("📓 Raiden", callback_data=f"khset_{user.id}_Raiden", style="primary"),
+                InlineKeyboardButton("🦠 Kryora", callback_data=f"khset_{user.id}_Kryora", style="primary")
             ],
             [
-                InlineKeyboardButton("🎐 Yugen", callback_data=f"khset_{user.id}_Yugen"),
-                InlineKeyboardButton("🧬 Shinsei", callback_data=f"khset_{user.id}_Shinsei")
+                InlineKeyboardButton("🎐 Yugen", callback_data=f"khset_{user.id}_Yugen", style="primary"),
+                InlineKeyboardButton("🧬 Shinsei", callback_data=f"khset_{user.id}_Shinsei", style="primary")
             ],
             [
-                InlineKeyboardButton("🪞 Kiwami", callback_data=f"khset_{user.id}_Kiwami"),
-                InlineKeyboardButton("✨ Kami", callback_data=f"khset_{user.id}_Kami")
+                InlineKeyboardButton("🪞 Kiwami", callback_data=f"khset_{user.id}_Kiwami", style="primary"),
+                InlineKeyboardButton("✨ Kami", callback_data=f"khset_{user.id}_Kami", style="primary")
             ],
             [
-                InlineKeyboardButton("⚜️ Hoshi", callback_data=f"khset_{user.id}_Hoshi"),
-                InlineKeyboardButton("💮 Ten", callback_data=f"khset_{user.id}_Ten")
+                InlineKeyboardButton("⚜️ Hoshi", callback_data=f"khset_{user.id}_Hoshi", style="primary"),
+                InlineKeyboardButton("💮 Ten", callback_data=f"khset_{user.id}_Ten", style="primary")
             ]
         ])
         try:
@@ -5062,15 +5030,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here"""
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🎀 Birthday Special", callback_data=f"kshop_rarity_{user.id}_Birthday Special"),
-                InlineKeyboardButton("🎐 Yugen", callback_data=f"kshop_rarity_{user.id}_Yugen")
+                InlineKeyboardButton("🎀 Birthday Special", callback_data=f"kshop_rarity_{user.id}_Birthday Special", style="primary"),
+                InlineKeyboardButton("🎐 Yugen", callback_data=f"kshop_rarity_{user.id}_Yugen", style="primary")
             ],
             [
-                InlineKeyboardButton("🧬 Shinsei", callback_data=f"kshop_rarity_{user.id}_Shinsei"),
-                InlineKeyboardButton("🪞 Kiwami", callback_data=f"kshop_rarity_{user.id}_Kiwami")
+                InlineKeyboardButton("🧬 Shinsei", callback_data=f"kshop_rarity_{user.id}_Shinsei", style="primary"),
+                InlineKeyboardButton("🪞 Kiwami", callback_data=f"kshop_rarity_{user.id}_Kiwami", style="primary")
             ],
             [
-                InlineKeyboardButton("✨ Kami", callback_data=f"kshop_rarity_{user.id}_Kami")
+                InlineKeyboardButton("✨ Kami", callback_data=f"kshop_rarity_{user.id}_Kami", style="primary")
             ]
         ])
         try:
@@ -5100,12 +5068,12 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
         keyboard = []
         for o_idx, opt in enumerate(quiz["options"]):
             prefix = "⭐" if opt == correct_opt else "📌"
-            keyboard.append([InlineKeyboardButton(f"{prefix} {opt}", callback_data="aa_noop")])
+            keyboard.append([InlineKeyboardButton(f"{prefix} {opt}", callback_data="aa_noop", style="primary")])
         
         select_row = []
         for o_idx, opt in enumerate(quiz["options"]):
             btn_text = f"✅ ရွေးပြီး ({o_idx+1})" if opt == correct_opt else f"အဖြေမှန် ({o_idx+1})"
-            select_row.append(InlineKeyboardButton(btn_text, callback_data=f"aa_sel_{o_idx}"))
+            select_row.append(InlineKeyboardButton(btn_text, callback_data=f"aa_sel_{o_idx}", style="primary"))
         keyboard.append(select_row)
 
         try:
@@ -5189,7 +5157,7 @@ CHECK /kc Use Kachi"""
 - /kgtop - View the Group Leaderboard.
 - /card [card_id] - View card details and owners.
 - /set [card_id] - Set your profile card for /kc."""
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back")]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back", style="primary")]])
         try:
             await query.edit_message_text(help_text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -5202,7 +5170,7 @@ CHECK /kc Use Kachi"""
 
 Reply to a user's message and use:
 - /kgift [card_id] - Send the specified card (Example: /kgift 1201)."""
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back")]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="menu_back", style="primary")]])
         try:
             await query.edit_message_text(kgift_text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -5223,11 +5191,11 @@ Reply to a user's message and use:
 - Use /ktop to view the leaderboard."""
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Help 📖", callback_data="menu_help"),
-                InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift")
+                InlineKeyboardButton("Help 📖", callback_data="menu_help", style="primary"),
+                InlineKeyboardButton("Gift 🎁", callback_data="menu_kgift", style="primary")
             ],
             [
-                InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true")
+                InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true", style="success")
             ]
         ])
         try:
