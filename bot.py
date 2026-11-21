@@ -3963,6 +3963,7 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🐞 <b>Collection Name</b>
 {col_name}
 ━━━━━━━━━━━━━━━━━━
+<b>{card['card_id']} - {card['name']}</b>
 <b>[ {get_rarity_emoji(r)} · {r_display} ]</b>
 
 🌍 <b>GLOBAL DROP -</b> {global_drop_count}
