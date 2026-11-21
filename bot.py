@@ -9,7 +9,7 @@ import datetime
 import html
 import uuid
 import asyncpg
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
+from telegram import InlineKeyboardButton as _TelegramInlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
 from telegram.error import TelegramError, NetworkError, TimedOut
 from telegram.ext import (
     Application,
@@ -21,6 +21,38 @@ from telegram.ext import (
     InlineQueryHandler,
     BaseUpdateProcessor,
 )
+
+# Apply Telegram's native inline-button colors without changing button text,
+# callback data, URLs, layout, or any bot/game logic.
+def InlineKeyboardButton(*args, **kwargs):
+    if "style" not in kwargs:
+        button_text = kwargs.get("text", args[0] if args else "")
+        label = str(button_text).casefold()
+
+        danger_words = ("cancel", "delete", "remove", "decline", "reject", "close")
+        success_words = (
+            "confirm", "buy", "purchase", "joined", "open", "claim", "add",
+            "spin", "all in", "bet", "send", "accept", "collect", "gift",
+            "ဝယ်မည်", "အတည်ပြု", "လောင်းမယ်", "ဖမ်းမယ်",
+        )
+
+        if any(word in label for word in danger_words):
+            kwargs["style"] = "danger"   # red
+        elif any(word in label for word in success_words):
+            kwargs["style"] = "success" # green
+        else:
+            kwargs["style"] = "primary" # blue
+
+    try:
+        return _TelegramInlineKeyboardButton(*args, **kwargs)
+    except TypeError as exc:
+        # Older python-telegram-bot versions do not expose the Bot API style field.
+        # Keep the bot functional; upgrading to PTB 22.7+ enables the colors.
+        if "style" in kwargs and "style" in str(exc):
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs.pop("style", None)
+            return _TelegramInlineKeyboardButton(*args, **fallback_kwargs)
+        raise
 
 # Environment Variables
 TOKEN = os.getenv("BOT_TOKEN")
@@ -1237,11 +1269,8 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
     rarity_emoji = get_rarity_emoji(card.get('rarity') or 'Ten')
-    caption = (f"<b>✦ CHARACTER HAS SPAWNED ✦</b>\n"
-               f"<b>{rarity_emoji} ROR CARD DROP</b>\n"
-               "━━━━━━━━━━━━━━━━━━\n"
-               "⚡ <b>FAST TO CATCH</b>\n"
-               "Use <code>/mm name</code> to claim this character!")
+    caption = (f"{rarity_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
+               "📯 Fast to Catch 🐌 Use - /mm name")
     try:
         if card['type'] == 'photo':
             msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML', reply_to_message_id=reply_to_message_id)
@@ -1348,15 +1377,9 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     rarity = get_rarity_display(card.get('rarity', 'Ten'))
     collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
-    caption = (f"<b>✦ CARD CAPTURED ✦</b>\n"
-               f"🎉 Congratulations, {get_mention(user.id, user.first_name)}!\n"
-               "━━━━━━━━━━━━━━━━━━\n"
-               f"🎴 <b>{card['name']}</b>\n"
-               f"🆔 <b>Card ID:</b> <code>{card['card_id']}</code>\n"
-               f"⭐ <b>Rarity:</b> {rarity}\n"
-               f"📚 <b>Collection:</b> {collection}\n"
-               "━━━━━━━━━━━━━━━━━━\n"
-               "🔎 <b>Check:</b> <code>/kc</code>")
+    caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
+               f"❀Cᴀʀᴅ - {card['name']}\n         ✿ {card['card_id']}\n"
+               f"❀RARITY - {rarity}\n      ✿ {collection}")
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}')]])
     try:
         if card['type'] == 'photo':
@@ -2415,14 +2438,14 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """, card_id, card_name, c_type, file_id, rarity, selected_collection)
 
         r_display = get_rarity_display(rarity)
-        log_text = f"""<b>✦ NEW BEYOND CARD ADDED ✦</b>
-━━━━━━━━━━━━━━━━━━
-🎴 <b>{card_name}</b>
-🆔 <b>Card ID:</b> <code>{card_id}</code>
-🎞 <b>Type:</b> {c_type.capitalize()}
-⭐ <b>Rarity:</b> {r_display}
-📚 <b>Collection:</b> {selected_collection}
-👤 <b>Added by:</b> {get_mention(user.id, user.first_name)}"""
+        log_text = f"""New ♠Beyond card added successfully
+
+❀ Card Name : {card_name}
+     ❝  ID : {card_id}
+❀ Type : {c_type.capitalize()}
+🌟 Rarity : {r_display}
+📚 Collection : {selected_collection}
+👤 Added By : {get_mention(user.id, user.first_name)}"""
 
         try:
             if c_type == "photo":
@@ -4255,16 +4278,14 @@ async def run_kbox_task(bot, chat_id, query, user_id, display_name):
         r_display = get_rarity_display(r)
         col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
 
-        result_caption = f"""<b>✦ KBOX CARD UNLOCKED ✦</b>
-🎉 Congratulations, {get_mention(user_id, display_name)}!
-━━━━━━━━━━━━━━━━━━
-🎴 <b>{card['name']}</b>
-🆔 <b>Card ID:</b> <code>{card['card_id']}</code>
-⭐ <b>Rarity:</b> {r_display}
-📚 <b>Collection:</b> {col_name}
-━━━━━━━━━━━━━━━━━━
-🔎 <b>Check:</b> <code>/kc</code>
-📖 <b>Details:</b> <code>/card {card['card_id']}</code>"""
+        result_caption = f"""🎉 Congratulations! {get_mention(user_id, display_name)} You got a card!
+Card Name : {card['name']}
+Id : <code>{card['card_id']}</code>
+Rarity : {r_display}
+Collection : {col_name}
+
+🔍 Check: /kc
+📖 Details: /card {card['card_id']}"""
 
         try:
             asyncio.create_task(query.message.delete())
@@ -5272,14 +5293,14 @@ Reply to a user's message and use:
 
         r_display = get_rarity_display(rarity)
         lock_msg_note = ""
-        log_text = f"""<b>✦ NEW CARD ADDED ✦</b>
-━━━━━━━━━━━━━━━━━━
-🎴 <b>{card_name}</b>
-🆔 <b>Card ID:</b> <code>{card_id}</code>
-🎞 <b>Type:</b> {c_type.capitalize()}
-⭐ <b>Rarity:</b> {r_display}
-📚 <b>Collection:</b> {selected_collection}{lock_msg_note}
-👤 <b>Added by:</b> {get_mention(user.id, user.first_name)}"""
+        log_text = f"""New card added successfully
+
+❀ Card Name : {card_name}
+     ❝  ID : {card_id}
+❀ Type : {c_type.capitalize()}
+🌟 Rarity : {r_display}
+📚 Collection : {selected_collection}{lock_msg_note}
+👤 Added By : {get_mention(user.id, user.first_name)}"""
 
         try:
             if c_type == "photo":
