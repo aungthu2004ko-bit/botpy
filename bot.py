@@ -278,7 +278,57 @@ async def _init_db_once():
             "🎞 Hana Hana No Mi [🌸]",
             "🎞 Yomi Yomi No Mi [💀]",
             "🎞 Tori Tori No Mi [🦅]",
-            "🎞 Yami Yami No Mi [🌑]"
+            "🎞 Yami Yami No Mi [🌑]",
+            "🎞 Sora Sora No Mi [☁️]",
+            "🎞 Kaze Kaze No Mi [🌪️]",
+            "🎞 Mizu Mizu No Mi [💧]",
+            "🎞 Kori Kori No Mi [❄️]",
+            "🎞 Tsuchi Tsuchi No Mi [🪨]",
+            "🎞 Kumo Kumo No Mi [🕸️]",
+            "🎞 Hikari Hikari No Mi [✨]",
+            "🎞 Kage Kage No Mi [🌘]",
+            "🎞 Rai Rai No Mi [⚡]",
+            "🎞 Niji Niji No Mi [🌈]",
+            "🎞 Tsuki Tsuki No Mi [🌙]",
+            "🎞 Taiyo Taiyo No Mi [☀️]",
+            "🎞 Mori Mori No Mi [🌳]",
+            "🎞 Bara Bara No Mi [🎈]",
+            "🎞 Toge Toge No Mi [🌵]",
+            "🎞 Hanaumi No Mi [🪷]",
+            "🎞 Kiba Kiba No Mi [🦷]",
+            "🎞 Hebi Hebi No Mi [🐍]",
+            "🎞 Neko Neko No Mi [🐈]",
+            "🎞 Inu Inu No Mi [🐕]",
+            "🎞 Kuma Kuma No Mi [🐻]",
+            "🎞 Kitsune Kitsune No Mi [🦊]",
+            "🎞 Tatsu Tatsu No Mi [🐉]",
+            "🎞 Kame Kame No Mi [🐢]",
+            "🎞 Hoshi Hoshi No Mi [⭐]",
+            "🎞 Umi Umi No Mi [🌊]",
+            "🎞 Shio Shio No Mi [🧂]",
+            "🎞 Ame Ame No Mi [🌧️]",
+            "🎞 Yuki Yuki No Mi [🌨️]",
+            "🎞 Kiri Kiri No Mi [🌫️]",
+            "🎞 Goro Goro No Mi [🔔]",
+            "🎞 Hibana Hibana No Mi [🧨]",
+            "🎞 Kemuri Kemuri No Mi [💨]",
+            "🎞 Mushi Mushi No Mi [🦋]",
+            "🎞 Tama Tama No Mi [🥚]",
+            "🎞 Kuri Kuri No Mi [🌰]",
+            "🎞 Suna Suna No Mi [🏜️]",
+            "🎞 Ishi Ishi No Mi [💎]",
+            "🎞 Gami Gami No Mi [📜]",
+            "🎞 Oni Oni No Mi [👹]",
+            "🎞 Tenshi Tenshi No Mi [👼]",
+            "🎞 Shishi Shishi No Mi [🦁]",
+            "🎞 Ryu Ryu No Mi [🦖]",
+            "🎞 Fukurou Fukurou No Mi [🦉]",
+            "🎞 Chou Chou No Mi [🐝]",
+            "🎞 Sakana Sakana No Mi [🐟]",
+            "🎞 Tako Tako No Mi [🐙]",
+            "🎞 Kani Kani No Mi [🦀]",
+            "🎞 Shima Shima No Mi [🏝️]",
+            "🎞 Yume Yume No Mi [💭]"
         ]
         unassigned_cards = await conn.fetch("SELECT card_id FROM cards WHERE collection IS NULL")
         for uc in unassigned_cards:
@@ -1377,7 +1427,7 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML', reply_to_message_id=msg.message_id
             )
         if drop['ended'] or time.time() >= drop['expires_at']:
-            return await msg.reply_text("⏰ Time is up. Please try again when the next card drops.", reply_to_message_id=msg.message_id)
+            return
         card = drop['card']
         expected_name = " ".join(str(card['name']).strip().split()).casefold()
         if requested != expected_name:
@@ -1448,7 +1498,7 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await msg.reply_text('Reply to an active spawned card with /kname.', reply_to_message_id=msg.message_id)
     drop = active_card_drops[replied.message_id]
     if drop['ended'] or time.time() >= drop['expires_at']:
-        return await msg.reply_text('⏰ Time is up. Please try again when the next card drops.', reply_to_message_id=msg.message_id)
+        return
     claim_command = f"/mm {drop['card']['name']}"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command), style="success")
@@ -1467,14 +1517,20 @@ async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: i
     drop = active_card_drops.get(msg_id)
     if not drop:
         return
-    if time.time() >= drop['expires_at'] and drop['winner_id'] is None:
-        drop['ended'] = True
-        try:
-            await context.bot.send_message(drop['chat_id'], '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။', reply_to_message_id=msg_id)
-        except Exception as e:
-            print(f"Could not post expired notice: {e}")
-    active_card_drops.pop(msg_id, None)
-    card_drop_locks.pop(msg_id, None)
+    # Synchronize timer finalization with /mm so expiry is announced only once.
+    lock = card_drop_locks.setdefault(msg_id, asyncio.Lock())
+    async with lock:
+        drop = active_card_drops.get(msg_id)
+        if not drop:
+            return
+        if time.time() >= drop['expires_at'] and drop['winner_id'] is None and not drop['ended']:
+            drop['ended'] = True
+            try:
+                await context.bot.send_message(drop['chat_id'], '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။', reply_to_message_id=msg_id)
+            except Exception as e:
+                print(f"Could not post expired notice: {e}")
+        active_card_drops.pop(msg_id, None)
+        card_drop_locks.pop(msg_id, None)
 
 
 @restricted_command
@@ -2382,7 +2438,7 @@ async def reveal_spawn_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await msg.reply_text("Reply to an active spawned card with .k or /k to reveal its name.", reply_to_message_id=msg.message_id)
     drop = active_card_drops[replied.message_id]
     if drop['ended'] or time.time() >= drop['expires_at']:
-        return await msg.reply_text('⏰ Time is up. Please wait for the next card.', reply_to_message_id=msg.message_id)
+        return
     pending_catch_targets[(msg.chat_id, update.effective_user.id)] = replied.message_id
     claim_command = f"/mm {drop['card']['name']}"
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Copy Name", copy_text=CopyTextButton(text=claim_command), style="success")]])
@@ -2509,7 +2565,57 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎞 Hana Hana No Mi [🌸]",
             "🎞 Yomi Yomi No Mi [💀]",
             "🎞 Tori Tori No Mi [🦅]",
-            "🎞 Yami Yami No Mi [🌑]"
+            "🎞 Yami Yami No Mi [🌑]",
+            "🎞 Sora Sora No Mi [☁️]",
+            "🎞 Kaze Kaze No Mi [🌪️]",
+            "🎞 Mizu Mizu No Mi [💧]",
+            "🎞 Kori Kori No Mi [❄️]",
+            "🎞 Tsuchi Tsuchi No Mi [🪨]",
+            "🎞 Kumo Kumo No Mi [🕸️]",
+            "🎞 Hikari Hikari No Mi [✨]",
+            "🎞 Kage Kage No Mi [🌘]",
+            "🎞 Rai Rai No Mi [⚡]",
+            "🎞 Niji Niji No Mi [🌈]",
+            "🎞 Tsuki Tsuki No Mi [🌙]",
+            "🎞 Taiyo Taiyo No Mi [☀️]",
+            "🎞 Mori Mori No Mi [🌳]",
+            "🎞 Bara Bara No Mi [🎈]",
+            "🎞 Toge Toge No Mi [🌵]",
+            "🎞 Hanaumi No Mi [🪷]",
+            "🎞 Kiba Kiba No Mi [🦷]",
+            "🎞 Hebi Hebi No Mi [🐍]",
+            "🎞 Neko Neko No Mi [🐈]",
+            "🎞 Inu Inu No Mi [🐕]",
+            "🎞 Kuma Kuma No Mi [🐻]",
+            "🎞 Kitsune Kitsune No Mi [🦊]",
+            "🎞 Tatsu Tatsu No Mi [🐉]",
+            "🎞 Kame Kame No Mi [🐢]",
+            "🎞 Hoshi Hoshi No Mi [⭐]",
+            "🎞 Umi Umi No Mi [🌊]",
+            "🎞 Shio Shio No Mi [🧂]",
+            "🎞 Ame Ame No Mi [🌧️]",
+            "🎞 Yuki Yuki No Mi [🌨️]",
+            "🎞 Kiri Kiri No Mi [🌫️]",
+            "🎞 Goro Goro No Mi [🔔]",
+            "🎞 Hibana Hibana No Mi [🧨]",
+            "🎞 Kemuri Kemuri No Mi [💨]",
+            "🎞 Mushi Mushi No Mi [🦋]",
+            "🎞 Tama Tama No Mi [🥚]",
+            "🎞 Kuri Kuri No Mi [🌰]",
+            "🎞 Suna Suna No Mi [🏜️]",
+            "🎞 Ishi Ishi No Mi [💎]",
+            "🎞 Gami Gami No Mi [📜]",
+            "🎞 Oni Oni No Mi [👹]",
+            "🎞 Tenshi Tenshi No Mi [👼]",
+            "🎞 Shishi Shishi No Mi [🦁]",
+            "🎞 Ryu Ryu No Mi [🦖]",
+            "🎞 Fukurou Fukurou No Mi [🦉]",
+            "🎞 Chou Chou No Mi [🐝]",
+            "🎞 Sakana Sakana No Mi [🐟]",
+            "🎞 Tako Tako No Mi [🐙]",
+            "🎞 Kani Kani No Mi [🦀]",
+            "🎞 Shima Shima No Mi [🏝️]",
+            "🎞 Yume Yume No Mi [💭]"
         ]
         selected_collection = random.choice(collections_list)
 
@@ -2591,7 +2697,57 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎞 Hana Hana No Mi [🌸]",
             "🎞 Yomi Yomi No Mi [💀]",
             "🎞 Tori Tori No Mi [🦅]",
-            "🎞 Yami Yami No Mi [🌑]"
+            "🎞 Yami Yami No Mi [🌑]",
+            "🎞 Sora Sora No Mi [☁️]",
+            "🎞 Kaze Kaze No Mi [🌪️]",
+            "🎞 Mizu Mizu No Mi [💧]",
+            "🎞 Kori Kori No Mi [❄️]",
+            "🎞 Tsuchi Tsuchi No Mi [🪨]",
+            "🎞 Kumo Kumo No Mi [🕸️]",
+            "🎞 Hikari Hikari No Mi [✨]",
+            "🎞 Kage Kage No Mi [🌘]",
+            "🎞 Rai Rai No Mi [⚡]",
+            "🎞 Niji Niji No Mi [🌈]",
+            "🎞 Tsuki Tsuki No Mi [🌙]",
+            "🎞 Taiyo Taiyo No Mi [☀️]",
+            "🎞 Mori Mori No Mi [🌳]",
+            "🎞 Bara Bara No Mi [🎈]",
+            "🎞 Toge Toge No Mi [🌵]",
+            "🎞 Hanaumi No Mi [🪷]",
+            "🎞 Kiba Kiba No Mi [🦷]",
+            "🎞 Hebi Hebi No Mi [🐍]",
+            "🎞 Neko Neko No Mi [🐈]",
+            "🎞 Inu Inu No Mi [🐕]",
+            "🎞 Kuma Kuma No Mi [🐻]",
+            "🎞 Kitsune Kitsune No Mi [🦊]",
+            "🎞 Tatsu Tatsu No Mi [🐉]",
+            "🎞 Kame Kame No Mi [🐢]",
+            "🎞 Hoshi Hoshi No Mi [⭐]",
+            "🎞 Umi Umi No Mi [🌊]",
+            "🎞 Shio Shio No Mi [🧂]",
+            "🎞 Ame Ame No Mi [🌧️]",
+            "🎞 Yuki Yuki No Mi [🌨️]",
+            "🎞 Kiri Kiri No Mi [🌫️]",
+            "🎞 Goro Goro No Mi [🔔]",
+            "🎞 Hibana Hibana No Mi [🧨]",
+            "🎞 Kemuri Kemuri No Mi [💨]",
+            "🎞 Mushi Mushi No Mi [🦋]",
+            "🎞 Tama Tama No Mi [🥚]",
+            "🎞 Kuri Kuri No Mi [🌰]",
+            "🎞 Suna Suna No Mi [🏜️]",
+            "🎞 Ishi Ishi No Mi [💎]",
+            "🎞 Gami Gami No Mi [📜]",
+            "🎞 Oni Oni No Mi [👹]",
+            "🎞 Tenshi Tenshi No Mi [👼]",
+            "🎞 Shishi Shishi No Mi [🦁]",
+            "🎞 Ryu Ryu No Mi [🦖]",
+            "🎞 Fukurou Fukurou No Mi [🦉]",
+            "🎞 Chou Chou No Mi [🐝]",
+            "🎞 Sakana Sakana No Mi [🐟]",
+            "🎞 Tako Tako No Mi [🐙]",
+            "🎞 Kani Kani No Mi [🦀]",
+            "🎞 Shima Shima No Mi [🏝️]",
+            "🎞 Yume Yume No Mi [💭]"
         ]
         selected_collection = random.choice(collections_list)
 
@@ -2753,7 +2909,57 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
             "🎞 Hana Hana No Mi [🌸]",
             "🎞 Yomi Yomi No Mi [💀]",
             "🎞 Tori Tori No Mi [🦅]",
-            "🎞 Yami Yami No Mi [🌑]"
+            "🎞 Yami Yami No Mi [🌑]",
+            "🎞 Sora Sora No Mi [☁️]",
+            "🎞 Kaze Kaze No Mi [🌪️]",
+            "🎞 Mizu Mizu No Mi [💧]",
+            "🎞 Kori Kori No Mi [❄️]",
+            "🎞 Tsuchi Tsuchi No Mi [🪨]",
+            "🎞 Kumo Kumo No Mi [🕸️]",
+            "🎞 Hikari Hikari No Mi [✨]",
+            "🎞 Kage Kage No Mi [🌘]",
+            "🎞 Rai Rai No Mi [⚡]",
+            "🎞 Niji Niji No Mi [🌈]",
+            "🎞 Tsuki Tsuki No Mi [🌙]",
+            "🎞 Taiyo Taiyo No Mi [☀️]",
+            "🎞 Mori Mori No Mi [🌳]",
+            "🎞 Bara Bara No Mi [🎈]",
+            "🎞 Toge Toge No Mi [🌵]",
+            "🎞 Hanaumi No Mi [🪷]",
+            "🎞 Kiba Kiba No Mi [🦷]",
+            "🎞 Hebi Hebi No Mi [🐍]",
+            "🎞 Neko Neko No Mi [🐈]",
+            "🎞 Inu Inu No Mi [🐕]",
+            "🎞 Kuma Kuma No Mi [🐻]",
+            "🎞 Kitsune Kitsune No Mi [🦊]",
+            "🎞 Tatsu Tatsu No Mi [🐉]",
+            "🎞 Kame Kame No Mi [🐢]",
+            "🎞 Hoshi Hoshi No Mi [⭐]",
+            "🎞 Umi Umi No Mi [🌊]",
+            "🎞 Shio Shio No Mi [🧂]",
+            "🎞 Ame Ame No Mi [🌧️]",
+            "🎞 Yuki Yuki No Mi [🌨️]",
+            "🎞 Kiri Kiri No Mi [🌫️]",
+            "🎞 Goro Goro No Mi [🔔]",
+            "🎞 Hibana Hibana No Mi [🧨]",
+            "🎞 Kemuri Kemuri No Mi [💨]",
+            "🎞 Mushi Mushi No Mi [🦋]",
+            "🎞 Tama Tama No Mi [🥚]",
+            "🎞 Kuri Kuri No Mi [🌰]",
+            "🎞 Suna Suna No Mi [🏜️]",
+            "🎞 Ishi Ishi No Mi [💎]",
+            "🎞 Gami Gami No Mi [📜]",
+            "🎞 Oni Oni No Mi [👹]",
+            "🎞 Tenshi Tenshi No Mi [👼]",
+            "🎞 Shishi Shishi No Mi [🦁]",
+            "🎞 Ryu Ryu No Mi [🦖]",
+            "🎞 Fukurou Fukurou No Mi [🦉]",
+            "🎞 Chou Chou No Mi [🐝]",
+            "🎞 Sakana Sakana No Mi [🐟]",
+            "🎞 Tako Tako No Mi [🐙]",
+            "🎞 Kani Kani No Mi [🦀]",
+            "🎞 Shima Shima No Mi [🏝️]",
+            "🎞 Yume Yume No Mi [💭]"
         ]
         collection = random.choice(collections_list)
 
@@ -4763,7 +4969,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         drop = active_card_drops.get(drop_id)
         if not drop or drop["chat_id"] != chat_id:
-            return await query.answer("⏰ Time is up. Please wait for the next card.", show_alert=True)
+            return await query.answer()
 
         lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
         async with lock:
@@ -4774,7 +4980,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     show_alert=True
                 )
             if drop["ended"] or time.time() >= drop["expires_at"]:
-                return await query.answer("⏰ Time is up. Please wait for the next card.", show_alert=True)
+                return await query.answer()
             if drop.get("name_button_used"):
                 return await query.answer("The character name has already been requested.", show_alert=True)
             drop["name_button_used"] = True
@@ -5367,7 +5573,57 @@ Reply to a user's message and use:
             "🎞 Hana Hana No Mi [🌸]",
             "🎞 Yomi Yomi No Mi [💀]",
             "🎞 Tori Tori No Mi [🦅]",
-            "🎞 Yami Yami No Mi [🌑]"
+            "🎞 Yami Yami No Mi [🌑]",
+            "🎞 Sora Sora No Mi [☁️]",
+            "🎞 Kaze Kaze No Mi [🌪️]",
+            "🎞 Mizu Mizu No Mi [💧]",
+            "🎞 Kori Kori No Mi [❄️]",
+            "🎞 Tsuchi Tsuchi No Mi [🪨]",
+            "🎞 Kumo Kumo No Mi [🕸️]",
+            "🎞 Hikari Hikari No Mi [✨]",
+            "🎞 Kage Kage No Mi [🌘]",
+            "🎞 Rai Rai No Mi [⚡]",
+            "🎞 Niji Niji No Mi [🌈]",
+            "🎞 Tsuki Tsuki No Mi [🌙]",
+            "🎞 Taiyo Taiyo No Mi [☀️]",
+            "🎞 Mori Mori No Mi [🌳]",
+            "🎞 Bara Bara No Mi [🎈]",
+            "🎞 Toge Toge No Mi [🌵]",
+            "🎞 Hanaumi No Mi [🪷]",
+            "🎞 Kiba Kiba No Mi [🦷]",
+            "🎞 Hebi Hebi No Mi [🐍]",
+            "🎞 Neko Neko No Mi [🐈]",
+            "🎞 Inu Inu No Mi [🐕]",
+            "🎞 Kuma Kuma No Mi [🐻]",
+            "🎞 Kitsune Kitsune No Mi [🦊]",
+            "🎞 Tatsu Tatsu No Mi [🐉]",
+            "🎞 Kame Kame No Mi [🐢]",
+            "🎞 Hoshi Hoshi No Mi [⭐]",
+            "🎞 Umi Umi No Mi [🌊]",
+            "🎞 Shio Shio No Mi [🧂]",
+            "🎞 Ame Ame No Mi [🌧️]",
+            "🎞 Yuki Yuki No Mi [🌨️]",
+            "🎞 Kiri Kiri No Mi [🌫️]",
+            "🎞 Goro Goro No Mi [🔔]",
+            "🎞 Hibana Hibana No Mi [🧨]",
+            "🎞 Kemuri Kemuri No Mi [💨]",
+            "🎞 Mushi Mushi No Mi [🦋]",
+            "🎞 Tama Tama No Mi [🥚]",
+            "🎞 Kuri Kuri No Mi [🌰]",
+            "🎞 Suna Suna No Mi [🏜️]",
+            "🎞 Ishi Ishi No Mi [💎]",
+            "🎞 Gami Gami No Mi [📜]",
+            "🎞 Oni Oni No Mi [👹]",
+            "🎞 Tenshi Tenshi No Mi [👼]",
+            "🎞 Shishi Shishi No Mi [🦁]",
+            "🎞 Ryu Ryu No Mi [🦖]",
+            "🎞 Fukurou Fukurou No Mi [🦉]",
+            "🎞 Chou Chou No Mi [🐝]",
+            "🎞 Sakana Sakana No Mi [🐟]",
+            "🎞 Tako Tako No Mi [🐙]",
+            "🎞 Kani Kani No Mi [🦀]",
+            "🎞 Shima Shima No Mi [🏝️]",
+            "🎞 Yume Yume No Mi [💭]"
         ]
         selected_collection = random.choice(collections_list)
 
