@@ -9,7 +9,7 @@ import datetime
 import html
 import uuid
 import asyncpg
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton, Bot, Message, CallbackQuery
 from telegram.error import TelegramError, NetworkError, TimedOut
 from telegram.ext import (
     Application,
@@ -22,6 +22,91 @@ from telegram.ext import (
     BaseUpdateProcessor,
     ApplicationHandlerStop,
 )
+
+
+# Convert visible Latin letters and digits to Telegram-friendly Unicode Monospace.
+# HTML tags/entities are preserved so existing formatting and parse modes keep working.
+_MONO_TABLE = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    "𝙰𝙱𝙲𝙳𝙴𝙵𝙶𝙷𝙸𝙹𝙺𝙻𝙼𝙽𝙾𝙿𝚀𝚁𝚂𝚃𝚄𝚅𝚆𝚇𝚈𝚉"
+    "𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣"
+    "𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿"
+)
+
+def _mono_visible_text(value):
+    if not isinstance(value, str):
+        return value
+    parts = re.split(r'(<[^>]*>|&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)', value)
+    return ''.join(part if (part.startswith('<') and part.endswith('>')) or
+                   re.fullmatch(r'&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);', part)
+                   else part.translate(_MONO_TABLE) for part in parts)
+
+# Apply Mono styling to outgoing bot messages and inline keyboard labels only.
+# Commands, callback_data, IDs, and database values are never modified.
+_original_bot_send_message = Bot.send_message
+async def _mono_bot_send_message(self, *args, **kwargs):
+    if len(args) >= 2:
+        args = (args[0], _mono_visible_text(args[1]), *args[2:])
+    elif "text" in kwargs:
+        kwargs["text"] = _mono_visible_text(kwargs["text"])
+    return await _original_bot_send_message(self, *args, **kwargs)
+Bot.send_message = _mono_bot_send_message
+
+_original_bot_edit_message_text = Bot.edit_message_text
+async def _mono_bot_edit_message_text(self, *args, **kwargs):
+    if len(args) >= 2:
+        args = (args[0], _mono_visible_text(args[1]), *args[2:])
+    elif "text" in kwargs:
+        kwargs["text"] = _mono_visible_text(kwargs["text"])
+    return await _original_bot_edit_message_text(self, *args, **kwargs)
+Bot.edit_message_text = _mono_bot_edit_message_text
+
+_original_message_reply_text = Message.reply_text
+async def _mono_message_reply_text(self, *args, **kwargs):
+    if args:
+        args = (_mono_visible_text(args[0]), *args[1:])
+    elif "text" in kwargs:
+        kwargs["text"] = _mono_visible_text(kwargs["text"])
+    return await _original_message_reply_text(self, *args, **kwargs)
+Message.reply_text = _mono_message_reply_text
+
+_original_callback_edit_message_text = CallbackQuery.edit_message_text
+async def _mono_callback_edit_message_text(self, *args, **kwargs):
+    if args:
+        args = (_mono_visible_text(args[0]), *args[1:])
+    elif "text" in kwargs:
+        kwargs["text"] = _mono_visible_text(kwargs["text"])
+    return await _original_callback_edit_message_text(self, *args, **kwargs)
+CallbackQuery.edit_message_text = _mono_callback_edit_message_text
+
+_original_inline_button_init = InlineKeyboardButton.__init__
+def _mono_inline_button_init(self, *args, **kwargs):
+    if args:
+        args = (_mono_visible_text(args[0]), *args[1:])
+    elif "text" in kwargs:
+        kwargs["text"] = _mono_visible_text(kwargs["text"])
+    return _original_inline_button_init(self, *args, **kwargs)
+InlineKeyboardButton.__init__ = _mono_inline_button_init
+
+
+# Keep captions on outgoing media in the same Mono style as text messages.
+def _wrap_caption_method(cls, method_name):
+    original = getattr(cls, method_name, None)
+    if original is None:
+        return
+    async def wrapped(self, *args, **kwargs):
+        if "caption" in kwargs and kwargs["caption"] is not None:
+            kwargs["caption"] = _mono_visible_text(kwargs["caption"])
+        return await original(self, *args, **kwargs)
+    setattr(cls, method_name, wrapped)
+
+for _method_name in ("send_photo", "send_video", "send_animation", "send_document",
+                     "send_audio", "send_voice", "edit_message_caption"):
+    _wrap_caption_method(Bot, _method_name)
+
+for _method_name in ("reply_photo", "reply_video", "reply_animation", "reply_document",
+                     "reply_audio", "reply_voice"):
+    _wrap_caption_method(Message, _method_name)
 
 # Environment Variables
 TOKEN = os.getenv("BOT_TOKEN")
@@ -222,6 +307,12 @@ async def _init_db_once():
                 claim_date DATE NOT NULL DEFAULT CURRENT_DATE,
                 count INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, claim_date)
+            );
+            CREATE TABLE IF NOT EXISTS card_add_sessions (
+                user_id BIGINT PRIMARY KEY,
+                session_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS spam_restrictions (
                 user_id BIGINT PRIMARY KEY,
@@ -2436,6 +2527,17 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "file_id": file_id,
         "is_card_admin": is_card_admin
     }
+    # Persist the pending add so the rarity buttons still work after Railway restarts.
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO card_add_sessions (user_id, session_type, payload, created_at)
+               VALUES ($1, 'regular', $2, NOW())
+               ON CONFLICT (user_id) DO UPDATE SET
+                   session_type = EXCLUDED.session_type,
+                   payload = EXCLUDED.payload,
+                   created_at = NOW()""",
+            user.id, json.dumps(pending_card_adds[user.id], ensure_ascii=False)
+        )
 
     # Other Card Admins can only add up to Kryora
     keyboard_rows = [
@@ -2650,26 +2752,47 @@ async def import_character_catcher_forward(update: Update, context: ContextTypes
         return await msg.reply_text("❌ Forward ထဲမှာ Card ပုံ/ဗီဒီယို မပါပါ။")
 
     caption = (msg.caption or "").strip()
-
-    # Read only the actual name field/line; never absorb From/To, rarity,
-    # collection, admin names, or other audit-log text into the card name.
-    card_name = None
+    # Character Catcher Logs may describe an event/name/image update in one
+    # sentence, or use a dedicated "Character Name:" / "New Name:" field.
+    # Extract only the name value, never From/To/Rarity/Collection/admin text.
     caption_lines = [re.sub(r"<[^>]+>", "", line).strip() for line in caption.splitlines()]
-    name_patterns = [
-        r"^New\s+Name\s*:\s*(.+?)\s*$",
-        r"^Character\s+Name\s*:\s*(.+?)\s*$",
-        r"^Character\s*:\s*(.+?)\s*$",
-        r"^(?:.*?changed\s+event\s+for\s+)Character\s+(.+?)\s*$",
-        r"^(?:.*?added\s+new\s+Character)\s*:?\s*(.+?)\s*$",
-        r"^(?:updated\s+(?:the\s+)?image\s+for|image\s+for|for)\s+Character\s+(.+?)\s*$",
+    card_name = None
+
+    # Prefer explicit name fields. "New Name" takes precedence over old names.
+    explicit_patterns = [
+        r"(?:^|\b)New\s+Name\s*:\s*(.+?)\s*$",
+        r"(?:^|\b)Character\s+Name\s*:\s*(.+?)\s*$",
+        r"(?:^|\b)Character\s*:\s*(.+?)\s*$",
     ]
-    for pattern in name_patterns:
-        found = next((re.match(pattern, line, re.I) for line in caption_lines if re.match(pattern, line, re.I)), None)
-        if found:
-            card_name = found.group(1).strip()
+    for pattern in explicit_patterns:
+        for line in caption_lines:
+            match = re.search(pattern, line, re.I)
+            if match:
+                card_name = match.group(1).strip()
+                break
+        if card_name:
             break
 
-    # Some Character Catcher logs put the value on the line after the label.
+    # Logs such as "Amir... changed event for Character Isagi Yoichi"
+    # and "Amir... updated image for Character Isagi Yoichi".
+    if not card_name:
+        action_patterns = [
+            r"\b(?:changed\s+event\s+for|updated\s+image\s+for|added\s+new)\s+Character\s+(.+?)\s*$",
+            r"\bCharacter\s+(.+?)\s*$",
+        ]
+        for pattern in action_patterns:
+            for line in caption_lines:
+                match = re.search(pattern, line, re.I)
+                if match:
+                    candidate = match.group(1).strip()
+                    # Reject generic labels or audit fields accidentally matched.
+                    if not re.match(r"^(?:Name|Rarity|Collection|Anime|From|To)\b", candidate, re.I):
+                        card_name = candidate
+                        break
+            if card_name:
+                break
+
+    # Some logs put the value on the line immediately after the field label.
     if not card_name:
         for index, line in enumerate(caption_lines):
             if re.match(r"^(?:New\s+Name|Character\s+Name)\s*:?\s*$", line, re.I):
@@ -2677,6 +2800,15 @@ async def import_character_catcher_forward(update: Update, context: ContextTypes
                     card_name = caption_lines[index + 1].strip()
                     break
 
+    if card_name:
+        # Remove trailing audit text if it was included on the same line.
+        card_name = re.split(
+            r"\s+(?:From|To|RARITY|Rarity|Collection|Anime)\s*:",
+            card_name, maxsplit=1, flags=re.I
+        )[0].strip()
+        card_name = re.sub(r"\s+", " ", card_name).strip(" .:-")
+        # Title-case each space-separated word, preserving non-letter tags/emojis.
+        card_name = " ".join(word[:1].upper() + word[1:].lower() for word in card_name.split())
     if not card_name:
         return await msg.reply_text("❌ Forward caption ထဲက Character Name ကို မဖတ်နိုင်ပါ။")
 
@@ -2701,6 +2833,17 @@ async def import_character_catcher_forward(update: Update, context: ContextTypes
                 break
 
     pending_cc_channel_adds[user.id] = {"card_id": card_id, "name": card_name, "type": c_type, "file_id": file_id}
+    # Keep forwarded Character Catcher imports across process restarts too.
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO card_add_sessions (user_id, session_type, payload, created_at)
+               VALUES ($1, 'character_catcher', $2, NOW())
+               ON CONFLICT (user_id) DO UPDATE SET
+                   session_type = EXCLUDED.session_type,
+                   payload = EXCLUDED.payload,
+                   created_at = NOW()""",
+            user.id, json.dumps(pending_cc_channel_adds[user.id], ensure_ascii=False)
+        )
     rarities = [
         [InlineKeyboardButton("♠ Beyond", callback_data=f"ccrarity_{user.id}_Beyond", style="primary")],
         [InlineKeyboardButton("📓 Raiden", callback_data=f"ccrarity_{user.id}_Raiden", style="primary")],
@@ -5218,9 +5361,22 @@ Reply to a user's message and use:
         _, allowed_uid_text, rarity = data.split("_", 2)
         if user.id != int(allowed_uid_text):
             return await query.answer("❌ Not for you.", show_alert=True)
-        card_info = pending_cc_channel_adds.pop(user.id, None)
+        card_info = None
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT session_type, payload FROM card_add_sessions WHERE user_id = $1",
+                user.id
+            )
+            if row and row["session_type"] == "character_catcher":
+                try:
+                    card_info = json.loads(row["payload"])
+                except (TypeError, json.JSONDecodeError):
+                    card_info = None
+                if card_info:
+                    await conn.execute("DELETE FROM card_add_sessions WHERE user_id = $1", user.id)
+        pending_cc_channel_adds.pop(user.id, None)
         if not card_info:
-            return await query.answer("❌ Card addition session expired.", show_alert=True)
+            return await query.answer("❌ Card addition session expired. Please forward the card again.", show_alert=True)
         selected_collection = "🎞 Ope Ope No Mi [ 🩺]"
         if (card_info["type"] == "video" and rarity != "Kryora") or (card_info["type"] != "video" and rarity == "Kryora"):
             return await query.answer("❌ Kryora သည် Video Card သီးသန့်ဖြစ်ပါတယ်။", show_alert=True)
@@ -5271,12 +5427,23 @@ Reply to a user's message and use:
         if rarity in ("Beyond", "Birthday Special") and user.id != ADMIN_ID:
             return await query.answer("❌ Only the Bot Admin can add this rarity.", show_alert=True)
 
-        card_info = pending_card_adds.get(user.id)
-        if card_info:
-            del pending_card_adds[user.id]
+        card_info = None
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT session_type, payload FROM card_add_sessions WHERE user_id = $1",
+                user.id
+            )
+            if row and row["session_type"] == "regular":
+                try:
+                    card_info = json.loads(row["payload"])
+                except (TypeError, json.JSONDecodeError):
+                    card_info = None
+                if card_info:
+                    await conn.execute("DELETE FROM card_add_sessions WHERE user_id = $1", user.id)
+        pending_card_adds.pop(user.id, None)
 
         if not card_info:
-            return await query.answer("❌ Card addition session expired.", show_alert=True)
+            return await query.answer("❌ Card addition session expired. Please run /add again.", show_alert=True)
 
         if (card_info["type"] == "video" and rarity != "Kryora") or (card_info["type"] != "video" and rarity == "Kryora"):
             return await query.answer("❌ Kryora သည် Video Card သီးသန့်ဖြစ်ပါတယ်။", show_alert=True)
