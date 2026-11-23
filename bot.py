@@ -33,6 +33,13 @@ _MONO_TABLE = str.maketrans(
     "𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿"
 )
 
+_PLAIN_OPEN = "\x01PLAIN:"
+_PLAIN_CLOSE = ":PLAIN\x02"
+
+def _plain_text(value):
+    """Mark a dynamic text segment to bypass the global Mono conversion."""
+    return f"{_PLAIN_OPEN}{value}{_PLAIN_CLOSE}"
+
 def _mono_visible_text(value):
     if not isinstance(value, str):
         return value
@@ -48,11 +55,15 @@ def _mono_visible_text(value):
         r'|&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)',
         re.IGNORECASE | re.DOTALL,
     )
-    parts = protected_pattern.split(value)
-    return ''.join(
+    # Preserve explicitly marked character names as ordinary text.
+    marker_pattern = re.compile(re.escape(_PLAIN_OPEN) + r"(.*?)" + re.escape(_PLAIN_CLOSE), re.DOTALL)
+    protected_value = marker_pattern.sub(lambda m: "\x03" + m.group(1).replace("\x03", "") + "\x04", value)
+    parts = protected_pattern.split(protected_value)
+    converted = ''.join(
         part if protected_pattern.fullmatch(part) else part.translate(_MONO_TABLE)
         for part in parts
     )
+    return re.sub(r"\x03(.*?)\x04", lambda m: m.group(1), converted, flags=re.DOTALL)
 
 # Apply Mono styling to outgoing bot messages and inline keyboard labels only.
 # Commands, callback_data, IDs, and database values are never modified.
@@ -152,6 +163,7 @@ pending_kachi_transfers = {}
 pending_card_buys = {}
 active_kbox_users = set()  # Track ongoing Kbox sessions per user
 kshop_prices = {}  # Track shop card prices per user session
+active_kdic_games = {}  # (chat_id, user_id) -> private dice-game state
 
 # Cooldown Stores for /kbox, and /kslot
 kbox_cooldowns = {}
@@ -1450,7 +1462,7 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rarity = get_rarity_display(card.get('rarity', 'Ten'))
     collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
     caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
-               f"❀Cᴀʀᴅ - {card['name']}\n         ✿ {card['card_id']}\n"
+               f"❀Cᴀʀᴅ - {_plain_text(html.escape(card['name']))}\n         ✿ {card['card_id']}\n"
                f"❀RARITY - {rarity}\n      ✿ {collection}")
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
     try:
@@ -1472,11 +1484,12 @@ async def kname_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if drop['ended'] or time.time() >= drop['expires_at']:
         return
     claim_command = f"/mm {drop['card']['name']}"
+    display_command = f"/mm {_plain_text(html.escape(drop['card']['name']))}"
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("📋 Copy Claim Command", copy_text=CopyTextButton(text=claim_command), style="success")
     ]])
     return await msg.reply_text(
-        f"Use This - <code>{claim_command}</code>",
+        f"Use This - {display_command}",
         parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id
     )
 
@@ -2150,9 +2163,10 @@ async def reveal_spawn_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     pending_catch_targets[(msg.chat_id, update.effective_user.id)] = replied.message_id
     claim_command = f"/mm {drop['card']['name']}"
+    display_command = f"/mm {_plain_text(html.escape(drop['card']['name']))}"
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Copy Name", copy_text=CopyTextButton(text=claim_command), style="success")]])
     return await msg.reply_text(
-        f"Use This - <code>{claim_command}</code>",
+        f"Use This - {display_command}",
         parse_mode='HTML', reply_markup=keyboard, reply_to_message_id=msg.message_id
     )
 
@@ -4863,8 +4877,130 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 
+@restricted_command
+async def kdic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not msg or not user or not chat:
+        return
+    key = (chat.id, user.id)
+    if key in active_kdic_games:
+        return await msg.reply_text("⚠️ မင်းရဲ့ Dice Game တစ်ခု လက်ရှိကစားနေဆဲပါ။ အဲ့ဒီဂိမ်းကို အရင်ပြီးအောင်လုပ်ပါ။", reply_to_message_id=msg.message_id)
+    active_kdic_games[key] = {"owner_id": user.id, "chat_id": chat.id, "stage": "side", "side": None, "bet": 0}
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Small (1–3)", callback_data=f"kdic_side_{user.id}_small", style="primary"),
+        InlineKeyboardButton("Big (4–6)", callback_data=f"kdic_side_{user.id}_big", style="primary"),
+    ]])
+    await msg.reply_text("🎲 <b>Kachi Dice Game</b>\n\nSmall — 1 / 2 / 3\nBig — 4 / 5 / 6\n\nဘယ်ဘက်ကို ရွေးမလဲ?", parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg.message_id)
+
+
+@restricted_command
+async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not msg or not user or not chat:
+        return
+    key = (chat.id, user.id)
+    game = active_kdic_games.get(key)
+    if not game or game.get("stage") != "bet":
+        return await msg.reply_text("❌ အရင်ဆုံး /kdic နဲ့ဂိမ်းစပြီး Small / Big ရွေးပါ။", reply_to_message_id=msg.message_id)
+    args = context.args or []
+    if len(args) == 2 and args[0].lower() == "kachi":
+        amount_text = args[1]
+    elif len(args) == 1:
+        amount_text = args[0]
+    else:
+        return await msg.reply_text("အသုံးပြုပုံ — /kbet Kachi 1000", reply_to_message_id=msg.message_id)
+    try:
+        amount = int(amount_text.replace(",", ""))
+    except ValueError:
+        return await msg.reply_text("❌ Kachi ပမာဏကို ဂဏန်းနဲ့ရေးပါ။ ဥပမာ /kbet Kachi 1000", reply_to_message_id=msg.message_id)
+    if amount <= 0:
+        return await msg.reply_text("❌ လောင်းကြေးသည် 1 Kachi ထက် မနည်းရပါ။", reply_to_message_id=msg.message_id)
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1 FOR UPDATE", user.id)
+            if not row:
+                return await msg.reply_text("❌ User အကောင့်ကို မတွေ့ပါ။ အရင်ဆုံး /start နှိပ်ပါ။", reply_to_message_id=msg.message_id)
+            balance = int(row["coins"] or 0)
+            if balance < amount:
+                return await msg.reply_text(f"❌ Kachi မလုံလောက်ပါ။ လက်ကျန် {balance:,} Kachi ရှိပါတယ်။", reply_to_message_id=msg.message_id)
+            await conn.execute("UPDATE users SET coins = coins - $1 WHERE user_id = $2", amount, user.id)
+    game["bet"] = amount
+    game["stage"] = "spin"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🎲 Spin", callback_data=f"kdic_spin_{user.id}", style="success"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"kdic_cancel_{user.id}", style="danger"),
+    ]])
+    await msg.reply_text(f"🎲 <b>Dice Game Ready</b>\n\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\n\nSpin နှိပ်ပြီး ကစားပါ။", parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg.message_id)
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if query and query.data and query.data.startswith("kdic_"):
+        data = query.data
+        user = query.from_user
+        chat_id = query.message.chat_id if query.message else None
+        if not chat_id:
+            return await query.answer()
+        parts = data.split("_")
+        try:
+            owner_id = int(parts[2])
+        except (ValueError, IndexError):
+            return await query.answer("ဒီဂိမ်းကို အသုံးမပြုနိုင်တော့ပါ။", show_alert=True)
+        if user.id != owner_id:
+            return await query.answer("❌ ဒီဂိမ်းကို စတင်ထားသူတစ်ယောက်တည်းသာ နှိပ်နိုင်ပါတယ်။", show_alert=True)
+        key = (chat_id, owner_id)
+        game = active_kdic_games.get(key)
+        if not game:
+            return await query.answer("ဒီဂိမ်း သက်တမ်းကုန်သွားပါပြီ။", show_alert=True)
+        action = parts[1]
+        if action == "side":
+            if game.get("stage") != "side":
+                return await query.answer("ဘက်ရွေးချယ်မှု ပြီးသွားပါပြီ။", show_alert=True)
+            side = parts[3] if len(parts) > 3 else ""
+            if side not in ("small", "big"):
+                return await query.answer("ရွေးချယ်မှု မမှန်ပါ။", show_alert=True)
+            game["side"] = side
+            game["stage"] = "bet"
+            await query.answer()
+            await query.edit_message_text(f"🎲 <b>{side.title()} ကို ရွေးပြီးပါပြီ။</b>\n\nလောင်းကြေးတင်ရန် — <code>/kbet Kachi 1000</code>\nဥပမာ — <code>/kbet Kachi 5000</code>", parse_mode="HTML", reply_markup=None)
+            return
+        if action == "cancel":
+            if game.get("stage") != "spin":
+                return await query.answer("Cancel လုပ်လို့မရတော့ပါ။", show_alert=True)
+            amount = int(game.get("bet", 0))
+            await add_coins(owner_id, amount)
+            active_kdic_games.pop(key, None)
+            await query.answer("လောင်းကြေး ပြန်အမ်းပြီးပါပြီ။")
+            return await query.edit_message_text(f"❌ <b>Game Cancelled</b>\n💰 {amount:,} Kachi ပြန်အမ်းပြီးပါပြီ။", parse_mode="HTML", reply_markup=None)
+        if action == "spin":
+            if game.get("stage") != "spin":
+                return await query.answer("Spin လုပ်ရန် အဆင်သင့်မဖြစ်သေးပါ။", show_alert=True)
+            game["stage"] = "rolling"
+            await query.answer("Rolling...")
+            try:
+                dice_message = await context.bot.send_dice(chat_id=chat_id, emoji="🎲", reply_to_message_id=query.message.message_id)
+                value = dice_message.dice.value
+                # Telegram dice animations take a few seconds to finish client-side.
+                await asyncio.sleep(4)
+                won = (game["side"] == "small" and value in (1, 2, 3)) or (game["side"] == "big" and value in (4, 5, 6))
+                amount = int(game.get("bet", 0))
+                payout = amount * 2 if won else 0
+                if payout:
+                    await add_coins(owner_id, payout)
+                async with db_pool.acquire() as conn:
+                    row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1", owner_id)
+                balance = int(row["coins"] or 0) if row else 0
+                result = "🎉 <b>YOU WIN!</b>" if won else "😢 <b>YOU LOSE!</b>"
+                result += f"\n\n🎲 ရလဒ် — <b>{value}</b>\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\nဆုငွေ — <b>{payout:,} Kachi</b>\n💰 လက်ကျန် — <b>{balance:,} Kachi</b>"
+                active_kdic_games.pop(key, None)
+                return await query.edit_message_text(result, parse_mode="HTML", reply_markup=None)
+            except Exception as e:
+                print(f"/kdic spin failed: {e}")
+                # If the dice animation failed, restore the reserved stake.
+                await add_coins(owner_id, int(game.get("bet", 0)))
+                active_kdic_games.pop(key, None)
+                return await query.edit_message_text("❌ ဂိမ်းလုပ်ဆောင်ရာတွင် အမှားဖြစ်သွားသောကြောင့် လောင်းကြေးကို ပြန်အမ်းပေးလိုက်ပါတယ်။", reply_markup=None)
+        return await query.answer()
     if query and query.data and query.data.startswith("tg_"):
         return await handle_tg_bet_callback(query, context)
 
@@ -4903,6 +5039,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             drop["name_button_used"] = True
 
             claim_command = f"/mm {drop['card']['name']}"
+            display_command = f"/mm {_plain_text(html.escape(drop['card']['name']))}"
             copy_markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     "📋 Copy Name",
@@ -4913,7 +5050,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id,
-                    f"Use This - <code>{claim_command}</code>",
+                    f"Use This - {display_command}",
                     parse_mode="HTML",
                     reply_markup=copy_markup,
                     reply_to_message_id=drop_id
@@ -5808,6 +5945,8 @@ def main():
     app.add_handler(CommandHandler("kachi", kachi_cmd))
     app.add_handler(CommandHandler("myre", myre_cmd))
     app.add_handler(CommandHandler("kslot", kslot_cmd))  
+    app.add_handler(CommandHandler("kdic", kdic_cmd))
+    app.add_handler(CommandHandler("kbet", kbet_cmd))
     app.add_handler(CommandHandler("kbox", kbox_cmd))
     app.add_handler(CommandHandler("kdaily", kdaily_cmd))
     app.add_handler(CommandHandler("set", set_card_cmd))
