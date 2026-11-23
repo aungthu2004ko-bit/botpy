@@ -50,7 +50,7 @@ def _mono_visible_text(value):
     protected_pattern = re.compile(
         r'(<a\b[^>]*>.*?</a>'
         r'|https?://[^\s<>()]+'
-        r'|/mm(?=\s|$)'
+        r'|/[A-Za-z][A-Za-z0-9_]*(?:@[A-Za-z0-9_]+)?(?=\s|$)'
         r'|<[^>]*>'
         r'|&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)',
         re.IGNORECASE | re.DOTALL,
@@ -164,6 +164,7 @@ pending_card_buys = {}
 active_kbox_users = set()  # Track ongoing Kbox sessions per user
 kshop_prices = {}  # Track shop card prices per user session
 active_kdic_games = {}  # (chat_id, user_id) -> private dice-game state
+kdic_cooldowns = {}  # user_id -> timestamp of the last completed/cancelled dice game
 
 # Cooldown Stores for /kbox, and /kslot
 kbox_cooldowns = {}
@@ -849,7 +850,7 @@ async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     required_chats = (
         ("@beyondpoe", "Join Channel 📢", "https://t.me/beyondpoe"),
-        ("@Kachi_sGroup", "Join Main Group 🏰", MAIN_GROUP_LINK),
+        ("@Kachi_sGroup", "Join အထန် 🔞 Gp", MAIN_GROUP_LINK),
     )
     missing = []
     try:
@@ -4884,13 +4885,38 @@ async def kdic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     key = (chat.id, user.id)
     if key in active_kdic_games:
-        return await msg.reply_text("⚠️ မင်းရဲ့ Dice Game တစ်ခု လက်ရှိကစားနေဆဲပါ။ အဲ့ဒီဂိမ်းကို အရင်ပြီးအောင်လုပ်ပါ။", reply_to_message_id=msg.message_id)
-    active_kdic_games[key] = {"owner_id": user.id, "chat_id": chat.id, "stage": "side", "side": None, "bet": 0}
+        previous = active_kdic_games[key]
+        previous_chat_id = str(previous.get("chat_id", chat.id))
+        previous_message_id = previous.get("message_id")
+        if previous_message_id:
+            if previous_chat_id.startswith("-100"):
+                previous_link = f"https://t.me/c/{previous_chat_id[4:]}/{previous_message_id}"
+            else:
+                previous_link = f"tg://openmessage?chat_id={previous_chat_id}&message_id={previous_message_id}"
+            previous_text = f"အရင်ပွဲကို <a href=\"{previous_link}\">ဒီနေရာမှာ</a> အဆုံးသတ်ပေးပါ။"
+        else:
+            previous_text = "အရင်ပွဲကို အရင်ဆုံး အဆုံးသတ်ပေးပါ။"
+        return await msg.reply_text(
+            f"⚠️ Dice Game အရင်ပွဲ မပြီးသေးပါဘူး။\n{previous_text}",
+            parse_mode="HTML", reply_to_message_id=msg.message_id
+        )
+    now = time.time()
+    last_game = kdic_cooldowns.get(user.id, 0)
+    if now - last_game < 20:
+        remaining = max(1, int(20 - (now - last_game)))
+        return await msg.reply_text(
+            f"⏳ နောက်တစ်ပွဲကစားရန် <b>{remaining} စက္ကန့်</b> စောင့်ပေးပါ။",
+            parse_mode="HTML", reply_to_message_id=msg.message_id
+        )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Small (1–3)", callback_data=f"kdic_side_{user.id}_small", style="primary"),
         InlineKeyboardButton("Big (4–6)", callback_data=f"kdic_side_{user.id}_big", style="primary"),
     ]])
-    await msg.reply_text("🎲 <b>Kachi Dice Game</b>\n\nSmall — 1 / 2 / 3\nBig — 4 / 5 / 6\n\nဘယ်ဘက်ကို ရွေးမလဲ?", parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg.message_id)
+    sent = await msg.reply_text("🎲 <b>Kachi Dice Game</b>\n\nSmall — 1 / 2 / 3\nBig — 4 / 5 / 6\n\nဘယ်ဘက်ကို ရွေးမလဲ?", parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg.message_id)
+    active_kdic_games[key] = {
+        "owner_id": user.id, "chat_id": chat.id, "message_id": sent.message_id,
+        "stage": "side", "side": None, "bet": 0
+    }
 
 
 @restricted_command
@@ -4930,7 +4956,8 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("🎲 Spin", callback_data=f"kdic_spin_{user.id}", style="success"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"kdic_cancel_{user.id}", style="danger"),
     ]])
-    await msg.reply_text(f"🎲 <b>Dice Game Ready</b>\n\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\n\nSpin နှိပ်ပြီး ကစားပါ။", parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg.message_id)
+    sent = await msg.reply_text(f"🎲 <b>Dice Game Ready</b>\n\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\n\nSpin နှိပ်ပြီး ကစားပါ။", parse_mode="HTML", reply_markup=keyboard, reply_to_message_id=msg.message_id)
+    game["message_id"] = sent.message_id
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4962,7 +4989,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             game["side"] = side
             game["stage"] = "bet"
             await query.answer()
-            await query.edit_message_text(f"🎲 <b>{side.title()} ကို ရွေးပြီးပါပြီ။</b>\n\nလောင်းကြေးတင်ရန် — <code>/kbet Kachi 1000</code>\nဥပမာ — <code>/kbet Kachi 5000</code>", parse_mode="HTML", reply_markup=None)
+            await query.edit_message_text(f"🎲 <b>{side.title()} ကို ရွေးပြီးပါပြီ။</b>\n\nလောင်းကြေးတင်ရန် — /kbet Kachi 1000\nဥပမာ — /kbet Kachi 5000", parse_mode="HTML", reply_markup=None)
             return
         if action == "cancel":
             if game.get("stage") != "spin":
@@ -4970,8 +4997,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = int(game.get("bet", 0))
             await add_coins(owner_id, amount)
             active_kdic_games.pop(key, None)
+            kdic_cooldowns[owner_id] = time.time()
             await query.answer("လောင်းကြေး ပြန်အမ်းပြီးပါပြီ။")
-            return await query.edit_message_text(f"❌ <b>Game Cancelled</b>\n💰 {amount:,} Kachi ပြန်အမ်းပြီးပါပြီ။", parse_mode="HTML", reply_markup=None)
+            return await query.edit_message_text(f"❌ <b>Game Cancelled</b>\n💰 {amount:,} Kachi ပြန်အမ်းပြီးပါပြီ။\n\n⏳ နောက်တစ်ပွဲကစားရန် 20 စက္ကန့် စောင့်ပေးပါ။", parse_mode="HTML", reply_markup=None)
         if action == "spin":
             if game.get("stage") != "spin":
                 return await query.answer("Spin လုပ်ရန် အဆင်သင့်မဖြစ်သေးပါ။", show_alert=True)
@@ -4993,13 +5021,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result = "🎉 <b>YOU WIN!</b>" if won else "😢 <b>YOU LOSE!</b>"
                 result += f"\n\n🎲 ရလဒ် — <b>{value}</b>\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\nဆုငွေ — <b>{payout:,} Kachi</b>\n💰 လက်ကျန် — <b>{balance:,} Kachi</b>"
                 active_kdic_games.pop(key, None)
-                return await query.edit_message_text(result, parse_mode="HTML", reply_markup=None)
+                kdic_cooldowns[owner_id] = time.time()
+                return await query.edit_message_text(
+                    result + "\n\n⏳ နောက်တစ်ပွဲကစားရန် 20 စက္ကန့် စောင့်ပေးပါ။",
+                    parse_mode="HTML", reply_markup=None
+                )
             except Exception as e:
                 print(f"/kdic spin failed: {e}")
                 # If the dice animation failed, restore the reserved stake.
                 await add_coins(owner_id, int(game.get("bet", 0)))
                 active_kdic_games.pop(key, None)
-                return await query.edit_message_text("❌ ဂိမ်းလုပ်ဆောင်ရာတွင် အမှားဖြစ်သွားသောကြောင့် လောင်းကြေးကို ပြန်အမ်းပေးလိုက်ပါတယ်။", reply_markup=None)
+                kdic_cooldowns[owner_id] = time.time()
+                return await query.edit_message_text("❌ ဂိမ်းလုပ်ဆောင်ရာတွင် အမှားဖြစ်သွားသောကြောင့် လောင်းကြေးကို ပြန်အမ်းပေးလိုက်ပါတယ်။\n\n⏳ နောက်တစ်ပွဲကစားရန် 20 စက္ကန့် စောင့်ပေးပါ။", reply_markup=None)
         return await query.answer()
     if query and query.data and query.data.startswith("tg_"):
         return await handle_tg_bet_callback(query, context)
