@@ -995,7 +995,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_info = await context.bot.get_me()
     text = f"""👋 Hello {get_mention(user.id, user.first_name)}!
 
-🌺 Welcome to Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏!
+🌺 Welcome to Kachi Card GAME BOT!
 
 📌 <b>How to Use / အသုံးပြုနည်း</b>
 
@@ -1182,7 +1182,7 @@ async def unlock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return await update.message.reply_text(f"❌ Card ID <code>{context.args[0].strip()}</code> not found.", parse_mode="HTML", reply_to_message_id=msg_id)
 
             if not card['is_locked']:
-                return await update.message.reply_text(f"ℹ️ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) is already unlocked.", parse_mode="HTML", reply_to_message_id=msg_id)
+                return await update.message.reply_text(f"i️ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) is already unlocked.", parse_mode="HTML", reply_to_message_id=msg_id)
 
             await conn.execute("UPDATE cards SET is_locked = FALSE WHERE card_id = $1", context.args[0].strip())
             return await update.message.reply_text(
@@ -1212,7 +1212,7 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return await update.message.reply_text(f"❌ Card ID <code>{context.args[0].strip()}</code> not found.", parse_mode="HTML", reply_to_message_id=msg_id)
 
             if card['is_locked']:
-                return await update.message.reply_text(f"ℹ️ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) is already locked.", parse_mode="HTML", reply_to_message_id=msg_id)
+                return await update.message.reply_text(f"i️ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) is already locked.", parse_mode="HTML", reply_to_message_id=msg_id)
 
             await conn.execute("UPDATE cards SET is_locked = TRUE WHERE card_id = $1", context.args[0].strip())
             return await update.message.reply_text(
@@ -2017,7 +2017,7 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """)
 
     lines = [
-        "𝗗𝗔𝗜𝗟𝗬 🌍𝗧𝗢𝗣 -15-  𝗞𝗚𝗔𝗠𝗘,  𝗣𝗟𝗔𝗬𝗘𝗥𝗦",
+        "DAILY 🌍TOP -15-  KGAME,  PLAYERS",
         "",
         "Players              Total Kachi Win",
         "▰▱▰▱▰▱▰▱▰▱▰"
@@ -2650,13 +2650,39 @@ async def import_character_catcher_forward(update: Update, context: ContextTypes
         return await msg.reply_text("❌ Forward ထဲမှာ Card ပုံ/ဗီဒီယို မပါပါ။")
 
     caption = (msg.caption or "").strip()
-    # Channel posts commonly caption cards as: "updated image for Character NAME".
-    match = re.search(r"(?:updated\s+(?:the\s+)?image\s+for|image\s+for|for)\s+Character\s+(.+?)\s*$", caption, re.I | re.S)
-    if not match:
-        match = re.search(r"(?:Character\s+)([^\n]+?)\s*$", caption, re.I | re.S)
-    if not match:
+
+    # Read only the actual name field/line; never absorb From/To, rarity,
+    # collection, admin names, or other audit-log text into the card name.
+    card_name = None
+    caption_lines = [re.sub(r"<[^>]+>", "", line).strip() for line in caption.splitlines()]
+    name_patterns = [
+        r"^New\s+Name\s*:\s*(.+?)\s*$",
+        r"^Character\s+Name\s*:\s*(.+?)\s*$",
+        r"^Character\s*:\s*(.+?)\s*$",
+        r"^(?:.*?changed\s+event\s+for\s+)Character\s+(.+?)\s*$",
+        r"^(?:.*?added\s+new\s+Character)\s*:?\s*(.+?)\s*$",
+        r"^(?:updated\s+(?:the\s+)?image\s+for|image\s+for|for)\s+Character\s+(.+?)\s*$",
+    ]
+    for pattern in name_patterns:
+        found = next((re.match(pattern, line, re.I) for line in caption_lines if re.match(pattern, line, re.I)), None)
+        if found:
+            card_name = found.group(1).strip()
+            break
+
+    # Some Character Catcher logs put the value on the line after the label.
+    if not card_name:
+        for index, line in enumerate(caption_lines):
+            if re.match(r"^(?:New\s+Name|Character\s+Name)\s*:?\s*$", line, re.I):
+                if index + 1 < len(caption_lines):
+                    card_name = caption_lines[index + 1].strip()
+                    break
+
+    if not card_name:
         return await msg.reply_text("❌ Forward caption ထဲက Character Name ကို မဖတ်နိုင်ပါ။")
-    card_name = match.group(1).strip().strip(" .:-")
+
+    # Keep a trailing event tag such as [🏖], but remove punctuation noise.
+    card_name = re.sub(r"\s+", " ", card_name).strip(" .:-")
+    card_name = " ".join(word[:1].upper() + word[1:].lower() for word in card_name.split(" "))
     if not card_name:
         return await msg.reply_text("❌ Character Name မတွေ့ပါ။")
 
@@ -3214,10 +3240,10 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     page = max(0, min(page, total_pages - 1))
 
     mode_title = f" [{get_rarity_display(rarity_mode)} Mode]" if rarity_mode else ""
-    text_header = f"""❀ 𝙉𝘼𝙈𝙀 - {get_mention(target_id, display_name)}
-❀ 𝙂𝙡𝙤𝙗𝙖𝙡 𝙉𝙤 - #{global_rank}
+    text_header = f"""❀ NAME - {get_mention(target_id, display_name)}
+❀ Global No - #{global_rank}
 
-𝗛𝗔𝗥𝗘𝗠 𝗣𝗔𝗚𝗘{mode_title} ({page + 1}/{total_pages})"""
+HAREM PAGE{mode_title} ({page + 1}/{total_pages})"""
 
     if not user_card_rows:
         full_text = f"{text_header}\n\nCollection\n<i>No cards found.</i>"
@@ -4377,7 +4403,7 @@ def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွ�
     return (
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🐅 <b>ကျားနဂါးတိုက်ပွဲ</b> 🐉\n"
-        "<b>𝐓𝐈𝐆𝐄𝐑  ⚔️  𝐃𝐑𝐀𝐆𝐎𝐍</b>\n"
+        "<b>TIGER  ⚔️  DRAGON</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "🐅 <b>ကျား TIGER</b>\n"
         f"💰 <b>{round_state['tiger_total']:,} Kachi</b>\n\n"
@@ -5165,7 +5191,7 @@ Reply to a user's message and use:
         bot_info = await context.bot.get_me()
         text = f"""👋 Hello {get_mention(user.id, user.first_name)}!
 
-🌺 Welcome to Kachi Card 𝙂𝘼𝙈𝙀 𝘽𝙊𝙏!
+🌺 Welcome to Kachi Card GAME BOT!
 
 📌 <b>How to Use</b>
 - Add the bot to your group.
