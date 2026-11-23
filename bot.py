@@ -269,6 +269,9 @@ async def _init_db_once():
             if g['threshold'] is not None:
                 group_threshold[g['chat_id']] = g['threshold']
 
+        # Kryora is reserved for video cards; legacy photo cards are promoted to Raiden.
+        await conn.execute("UPDATE cards SET rarity = 'Raiden' WHERE rarity = 'Kryora' AND type = 'photo'")
+
         existing_cards = await conn.fetch("SELECT card_id, type FROM cards WHERE rarity IS NULL")
         for c in existing_cards:
             r = random.choices(["Shinsei", "Kiwami", "Kami", "Hoshi", "Ten"], weights=[1, 30, 30, 30, 30], k=1)[0]
@@ -2831,28 +2834,28 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "is_card_admin": is_card_admin
     }
 
-    # Other Card Admins can only add up to Kryora
-    keyboard_rows = [
-        [
-            InlineKeyboardButton("🦠 Kryora", callback_data=f"addrarity_{user.id}_Kryora", style="primary"),
-            InlineKeyboardButton("🎐 Yugen", callback_data=f"addrarity_{user.id}_Yugen", style="primary")
-        ],
-        [
-            InlineKeyboardButton("🧬 Shinsei", callback_data=f"addrarity_{user.id}_Shinsei", style="primary"),
-            InlineKeyboardButton("🪞 Kiwami", callback_data=f"addrarity_{user.id}_Kiwami", style="primary")
-        ],
-        [
-            InlineKeyboardButton("✨ Kami", callback_data=f"addrarity_{user.id}_Kami", style="primary"),
-            InlineKeyboardButton("⚜️ Hoshi", callback_data=f"addrarity_{user.id}_Hoshi", style="primary")
-        ],
-        [
-            InlineKeyboardButton("💮 Ten", callback_data=f"addrarity_{user.id}_Ten", style="primary")
+    # Kryora is video-only. Video cards have only Kryora as an available rarity.
+    if c_type == "video":
+        keyboard_rows = [[InlineKeyboardButton("🦠 Kryora (Video Only)", callback_data=f"addrarity_{user.id}_Kryora", style="primary")]]
+    else:
+        keyboard_rows = [
+            [InlineKeyboardButton("🎐 Yugen", callback_data=f"addrarity_{user.id}_Yugen", style="primary")],
+            [
+                InlineKeyboardButton("🧬 Shinsei", callback_data=f"addrarity_{user.id}_Shinsei", style="primary"),
+                InlineKeyboardButton("🪞 Kiwami", callback_data=f"addrarity_{user.id}_Kiwami", style="primary")
+            ],
+            [
+                InlineKeyboardButton("✨ Kami", callback_data=f"addrarity_{user.id}_Kami", style="primary"),
+                InlineKeyboardButton("⚜️ Hoshi", callback_data=f"addrarity_{user.id}_Hoshi", style="primary")
+            ],
+            [
+                InlineKeyboardButton("💮 Ten", callback_data=f"addrarity_{user.id}_Ten", style="primary")
+            ]
         ]
-    ]
-    if user.id == ADMIN_ID:
-        keyboard_rows.insert(0, [InlineKeyboardButton("♠ Beyond", callback_data=f"addrarity_{user.id}_Beyond", style="primary")])
-        keyboard_rows.insert(1, [InlineKeyboardButton("📓 Raiden", callback_data=f"addrarity_{user.id}_Raiden", style="primary")])
-        keyboard_rows.insert(2, [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"addrarity_{user.id}_Birthday Special", style="primary")])
+        if user.id == ADMIN_ID:
+            keyboard_rows.insert(0, [InlineKeyboardButton("♠ Beyond", callback_data=f"addrarity_{user.id}_Beyond", style="primary")])
+            keyboard_rows.insert(1, [InlineKeyboardButton("📓 Raiden", callback_data=f"addrarity_{user.id}_Raiden", style="primary")])
+            keyboard_rows.insert(2, [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"addrarity_{user.id}_Birthday Special", style="primary")])
 
     await update.message.reply_text(
         f"🎴 <b>Card Info Ready:</b>\n"
@@ -3066,15 +3069,18 @@ async def import_character_catcher_forward(update: Update, context: ContextTypes
                 break
 
     pending_cc_channel_adds[user.id] = {"card_id": card_id, "name": card_name, "type": c_type, "file_id": file_id}
-    rarities = [
-        [InlineKeyboardButton("♠ Beyond", callback_data=f"ccrarity_{user.id}_Beyond", style="primary")],
-        [InlineKeyboardButton("📓 Raiden", callback_data=f"ccrarity_{user.id}_Raiden", style="primary")],
-        [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"ccrarity_{user.id}_Birthday Special", style="primary")],
-        [InlineKeyboardButton("🦠 Kryora", callback_data=f"ccrarity_{user.id}_Kryora", style="primary"), InlineKeyboardButton("🎐 Yugen", callback_data=f"ccrarity_{user.id}_Yugen", style="primary")],
-        [InlineKeyboardButton("🧬 Shinsei", callback_data=f"ccrarity_{user.id}_Shinsei", style="primary"), InlineKeyboardButton("🪞 Kiwami", callback_data=f"ccrarity_{user.id}_Kiwami", style="primary")],
-        [InlineKeyboardButton("✨ Kami", callback_data=f"ccrarity_{user.id}_Kami", style="primary"), InlineKeyboardButton("⚜️ Hoshi", callback_data=f"ccrarity_{user.id}_Hoshi", style="primary")],
-        [InlineKeyboardButton("💮 Ten", callback_data=f"ccrarity_{user.id}_Ten", style="primary")]
-    ]
+    if c_type == "video":
+        rarities = [[InlineKeyboardButton("🦠 Kryora (Video Only)", callback_data=f"ccrarity_{user.id}_Kryora", style="primary")]]
+    else:
+        rarities = [
+            [InlineKeyboardButton("♠ Beyond", callback_data=f"ccrarity_{user.id}_Beyond", style="primary")],
+            [InlineKeyboardButton("📓 Raiden", callback_data=f"ccrarity_{user.id}_Raiden", style="primary")],
+            [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"ccrarity_{user.id}_Birthday Special", style="primary")],
+            [InlineKeyboardButton("🎐 Yugen", callback_data=f"ccrarity_{user.id}_Yugen", style="primary")],
+            [InlineKeyboardButton("🧬 Shinsei", callback_data=f"ccrarity_{user.id}_Shinsei", style="primary"), InlineKeyboardButton("🪞 Kiwami", callback_data=f"ccrarity_{user.id}_Kiwami", style="primary")],
+            [InlineKeyboardButton("✨ Kami", callback_data=f"ccrarity_{user.id}_Kami", style="primary"), InlineKeyboardButton("⚜️ Hoshi", callback_data=f"ccrarity_{user.id}_Hoshi", style="primary")],
+            [InlineKeyboardButton("💮 Ten", callback_data=f"ccrarity_{user.id}_Ten", style="primary")]
+        ]
     await msg.reply_text(
         f"🎴 <b>Forward Card Ready</b>\n\n🆔 ID: <code>{card_id}</code>\n🏷 Name: {html.escape(card_name)}\n\nRarity ရွေးပါ:",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rarities)
@@ -5624,6 +5630,10 @@ Reply to a user's message and use:
         card_info = pending_cc_channel_adds.pop(user.id, None)
         if not card_info:
             return await query.answer("❌ Card addition session expired.", show_alert=True)
+        if card_info.get("type") == "video" and rarity != "Kryora":
+            return await query.answer("❌ Video cards can only be added as Kryora.", show_alert=True)
+        if card_info.get("type") == "photo" and rarity == "Kryora":
+            return await query.answer("❌ Kryora is video-only; photo cards cannot be Kryora.", show_alert=True)
         selected_collection = "🎞 Ope Ope No Mi [ 🩺]"
         is_locked = rarity == "Beyond"
         async with db_pool.acquire() as conn:
@@ -5677,6 +5687,10 @@ Reply to a user's message and use:
         if not card_info:
             return await query.answer("❌ Card addition session expired.", show_alert=True)
 
+        if card_info.get("type") == "video" and rarity != "Kryora":
+            return await query.answer("❌ Video cards can only be added as Kryora.", show_alert=True)
+        if card_info.get("type") == "photo" and rarity == "Kryora":
+            return await query.answer("❌ Kryora is video-only; photo cards cannot be Kryora.", show_alert=True)
         card_info["rarity"] = rarity
 
         collections_list = [
