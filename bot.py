@@ -30,6 +30,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID", "@beyondpoe")
 CARD_LOG_CHANNEL_ID = "@beyondpoe"
 TIGER_DRAGON_CHANNEL_ID = "@beyondpoe"
+CHARACTER_CATCHER_LOGS_USERNAME = "character_catcher_logs"
+CHARACTER_CATCHER_IMPORT_LOG_CHANNEL = "@brnyaraa"
 
 # Main Group Link for /kbox, /klot, /kdaily, and /pre restriction
 MAIN_GROUP_LINK = "https://t.me/Kachi_sGroup"
@@ -47,6 +49,7 @@ tg_rounds = {}
 tg_pending_bets = {}
 tg_game_lock = asyncio.Lock()
 pending_card_adds = {}
+pending_cc_channel_adds = {}
 pending_quizzes = {}
 active_quizzes = {}
 pending_kachi_transfers = {}
@@ -2885,6 +2888,12 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
         return
 
     caption = (msg.caption or "").strip()
+    origin = getattr(msg, "forward_origin", None)
+    origin_chat = getattr(origin, "chat", None) if origin else None
+    legacy_chat = getattr(msg, "forward_from_chat", None)
+    forwarded_username = (getattr(origin_chat, "username", None) or getattr(legacy_chat, "username", None) or "").lower()
+    if forwarded_username == CHARACTER_CATCHER_LOGS_USERNAME:
+        return
     if not caption or "Card Name" not in caption or "Rarity" not in caption:
         return await msg.reply_text("❌ ဒီ Forward က Card Log ပုံစံမဟုတ်ပါ။ Card Log တစ်ခုလုံးကို ပုံ/ဗီဒီယိုနဲ့အတူ Forward လုပ်ပေးပါ။")
 
@@ -3011,6 +3020,66 @@ async def import_forwarded_card_log(update: Update, context: ContextTypes.DEFAUL
         f"🔒 Locked: {'Yes' if is_locked else 'No'}",
         parse_mode="HTML"
     )
+
+
+@restricted_command
+async def import_character_catcher_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prepare a forwarded Character Catcher Logs card for admin rarity selection."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or msg.chat.type != "private" or user.id != ADMIN_ID:
+        return
+
+    origin = getattr(msg, "forward_origin", None)
+    origin_chat = getattr(origin, "chat", None) if origin else None
+    legacy_chat = getattr(msg, "forward_from_chat", None)
+    username = (getattr(origin_chat, "username", None) or getattr(legacy_chat, "username", None) or "").lower()
+    if username != CHARACTER_CATCHER_LOGS_USERNAME:
+        return
+
+    if not (msg.photo or msg.video):
+        return await msg.reply_text("❌ Forward ထဲမှာ Card ပုံ/ဗီဒီယို မပါပါ။")
+
+    caption = (msg.caption or "").strip()
+    # Channel posts commonly caption cards as: "updated image for Character NAME".
+    match = re.search(r"(?:updated\s+(?:the\s+)?image\s+for|image\s+for|for)\s+Character\s+(.+?)\s*$", caption, re.I | re.S)
+    if not match:
+        match = re.search(r"(?:Character\s+)([^\n]+?)\s*$", caption, re.I | re.S)
+    if not match:
+        return await msg.reply_text("❌ Forward caption ထဲက Character Name ကို မဖတ်နိုင်ပါ။")
+    card_name = match.group(1).strip().strip(" .:-")
+    if not card_name:
+        return await msg.reply_text("❌ Character Name မတွေ့ပါ။")
+
+    file_id = msg.photo[-1].file_id if msg.photo else msg.video.file_id
+    c_type = "photo" if msg.photo else "video"
+    async with db_pool.acquire() as conn:
+        duplicate = await conn.fetchrow("SELECT card_id, name FROM cards WHERE file_id = $1", file_id)
+    if duplicate:
+        return await msg.reply_text(f"⚠️ ဒီ media က ရှိပြီးသား Card ဖြစ်ပါတယ်: {duplicate['name']} (ID: {duplicate['card_id']})")
+
+    async with db_pool.acquire() as conn:
+        while True:
+            card_id = str(random.randint(1000, 9999))
+            exists = await conn.fetchrow("SELECT card_id FROM cards WHERE card_id = $1", card_id)
+            if not exists:
+                break
+
+    pending_cc_channel_adds[user.id] = {"card_id": card_id, "name": card_name, "type": c_type, "file_id": file_id}
+    rarities = [
+        [InlineKeyboardButton("♠ Beyond", callback_data=f"ccrarity_{user.id}_Beyond", style="primary")],
+        [InlineKeyboardButton("📓 Raiden", callback_data=f"ccrarity_{user.id}_Raiden", style="primary")],
+        [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"ccrarity_{user.id}_Birthday Special", style="primary")],
+        [InlineKeyboardButton("🦠 Kryora", callback_data=f"ccrarity_{user.id}_Kryora", style="primary"), InlineKeyboardButton("🎐 Yugen", callback_data=f"ccrarity_{user.id}_Yugen", style="primary")],
+        [InlineKeyboardButton("🧬 Shinsei", callback_data=f"ccrarity_{user.id}_Shinsei", style="primary"), InlineKeyboardButton("🪞 Kiwami", callback_data=f"ccrarity_{user.id}_Kiwami", style="primary")],
+        [InlineKeyboardButton("✨ Kami", callback_data=f"ccrarity_{user.id}_Kami", style="primary"), InlineKeyboardButton("⚜️ Hoshi", callback_data=f"ccrarity_{user.id}_Hoshi", style="primary")],
+        [InlineKeyboardButton("💮 Ten", callback_data=f"ccrarity_{user.id}_Ten", style="primary")]
+    ]
+    await msg.reply_text(
+        f"🎴 <b>Forward Card Ready</b>\n\n🆔 ID: <code>{card_id}</code>\n🏷 Name: {html.escape(card_name)}\n\nRarity ရွေးပါ:",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rarities)
+    )
+
 
 @restricted_command
 async def ttcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5548,6 +5617,50 @@ Reply to a user's message and use:
         await query.answer()
         return
 
+    if data.startswith("ccrarity_"):
+        _, allowed_uid_text, rarity = data.split("_", 2)
+        if user.id != int(allowed_uid_text):
+            return await query.answer("❌ Not for you.", show_alert=True)
+        card_info = pending_cc_channel_adds.pop(user.id, None)
+        if not card_info:
+            return await query.answer("❌ Card addition session expired.", show_alert=True)
+        selected_collection = "🎞 Ope Ope No Mi [ 🩺]"
+        is_locked = rarity == "Beyond"
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                exists = await conn.fetchrow("SELECT card_id FROM cards WHERE card_id = $1 OR file_id = $2", card_info["card_id"], card_info["file_id"])
+                if exists:
+                    return await query.answer("⚠️ ဒီ Card ရှိပြီးသားပါ။", show_alert=True)
+                await conn.execute(
+                    "INSERT INTO cards (card_id, name, type, file_id, rarity, collection, is_locked) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    card_info["card_id"], card_info["name"], card_info["type"], card_info["file_id"], rarity, selected_collection, is_locked
+                )
+        display_rarity = get_rarity_display(rarity)
+        log_caption = (
+            f"New card added successfully\n\n❀ Card Name : {html.escape(card_info['name'])}\n"
+            f"     ❝  ID : {card_info['card_id']}\n❀ Type : {card_info['type'].capitalize()}\n"
+            f"🌟 Rarity : {display_rarity}\n📚 Collection : {selected_collection}\n"
+            f"👤 Added By : {get_mention(user.id, user.first_name)}"
+        )
+        try:
+            if card_info["type"] == "photo":
+                await context.bot.send_photo(chat_id=CHARACTER_CATCHER_IMPORT_LOG_CHANNEL, photo=card_info["file_id"], caption=log_caption, parse_mode="HTML")
+            else:
+                await context.bot.send_video(chat_id=CHARACTER_CATCHER_IMPORT_LOG_CHANNEL, video=card_info["file_id"], caption=log_caption, parse_mode="HTML")
+        except Exception as exc:
+            print(f"Character Catcher card log send failed: {type(exc).__name__}: {exc}")
+        try:
+            await query.message.edit_text(
+                f"✅ Card added successfully!\n\n🆔 Card ID: <code>{card_info['card_id']}</code>\n"
+                f"🎴 Name: {html.escape(card_info['name'])}\n🌟 Rarity: {display_rarity}\n📚 Collection: {selected_collection}",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        await query.answer("✅ Card added successfully!")
+        return
+
+
     if data.startswith("addrarity_"):
         _, allowed_uid_text, rarity = data.split("_", 2)
         allowed_uid = int(allowed_uid_text)
@@ -5960,6 +6073,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(InlineQueryHandler(inline_query_handler))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO), import_character_catcher_forward), group=1)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO), import_forwarded_card_log), group=1)
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & (~filters.COMMAND), tg_bet_amount_handler), group=-1)
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
