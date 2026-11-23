@@ -36,10 +36,23 @@ _MONO_TABLE = str.maketrans(
 def _mono_visible_text(value):
     if not isinstance(value, str):
         return value
-    parts = re.split(r'(<[^>]*>|&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)', value)
-    return ''.join(part if (part.startswith('<') and part.endswith('>')) or
-                   re.fullmatch(r'&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);', part)
-                   else part.translate(_MONO_TABLE) for part in parts)
+
+    # Keep Telegram links and the /mm command in ordinary ASCII text so links
+    # remain usable and Telegram can recognize /mm as a command. Preserve
+    # complete HTML anchors (including their visible link labels) as well.
+    protected_pattern = re.compile(
+        r'(<a\b[^>]*>.*?</a>'
+        r'|https?://[^\s<>()]+'
+        r'|/mm(?=\s|$)'
+        r'|<[^>]*>'
+        r'|&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    parts = protected_pattern.split(value)
+    return ''.join(
+        part if protected_pattern.fullmatch(part) else part.translate(_MONO_TABLE)
+        for part in parts
+    )
 
 # Apply Mono styling to outgoing bot messages and inline keyboard labels only.
 # Commands, callback_data, IDs, and database values are never modified.
