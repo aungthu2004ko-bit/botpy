@@ -178,6 +178,7 @@ active_card_drops = {}
 active_high_rarity_quizzes = {}  # quiz message_id -> card + random correct choice
 pending_catch_targets = {}  # (chat_id, user_id) -> spawned card message ID after .k reveal
 card_drop_locks = {}
+card_claim_locks = {}  # Serialize /mm claims per chat, including DB fallback.
 tg_game_task = None
 tg_stop_requested = False
 tg_current_round = None
@@ -1382,10 +1383,31 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None,
                 chat_id, "Spawn High Rarity 🍁\nPlease Choose Correct Button 💠",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
-            active_high_rarity_quizzes[quiz_msg.message_id] = {
+            quiz_data = {
                 "chat_id": chat_id, "card": dict(card), "correct": correct,
-                "used": False, "created_at": time.time()
+                "used": False, "created_at": time.time(),
+                "expires_at": time.time() + 50
             }
+            active_high_rarity_quizzes[quiz_msg.message_id] = quiz_data
+
+            async def expire_high_rarity_quiz(message_id, expected_quiz):
+                await asyncio.sleep(50)
+                current_quiz = active_high_rarity_quizzes.get(message_id)
+                if current_quiz is not expected_quiz or current_quiz.get("used"):
+                    return
+                current_quiz["used"] = True
+                active_high_rarity_quizzes.pop(message_id, None)
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="⌛ အချိန် 50 စက္ကန့် ပြည့်သွားပါပြီ။ ကဒ်သက်တမ်းကုန်သွားပါပြီ။",
+                        reply_markup=None
+                    )
+                except Exception as expire_error:
+                    print(f"Could not expire high-rarity quiz {message_id}: {expire_error}")
+
+            asyncio.create_task(expire_high_rarity_quiz(quiz_msg.message_id, quiz_data))
             return quiz_msg
         except Exception as e:
             print(f"Could not send high-rarity quiz: {e}")
@@ -1476,7 +1498,7 @@ def normalize_character_answer(value: str) -> str:
 
 
 @restricted_command
-async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
     if not context.args:
         return await _safe_reply_text(msg, "Use: /mm character name")
@@ -1520,6 +1542,9 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             (r for r in rows if normalize_character_answer(r['card_name']) == requested),
                             rows[0] if rows else None
                         )
+
+                # Remember whether this is a database-backed drop before local fallback.
+                drop_from_db = drop is not None
 
                 # Backward-compatible local fallback for a spawn created during DB downtime.
                 if not drop and replied_id is None:
@@ -1586,11 +1611,18 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user.id, drop['card_id']
                 )
                 await check_and_auto_lock_card(conn, drop['card_id'])
-                await conn.execute(
-                    """UPDATE active_card_drops SET winner_id=$1, winner_name=$2, ended=TRUE
-                       WHERE chat_id=$3 AND message_id=$4""",
-                    user.id, user.first_name, chat.id, drop['message_id']
-                )
+                if drop_from_db:
+                    claimed = await conn.fetchrow(
+                        """UPDATE active_card_drops
+                           SET winner_id=$1, winner_name=$2, ended=TRUE
+                           WHERE chat_id=$3 AND message_id=$4
+                             AND winner_id IS NULL AND ended=FALSE AND expires_at>$5
+                           RETURNING message_id""",
+                        user.id, user.first_name, chat.id, drop['message_id'], now
+                    )
+                    if not claimed:
+                        # Roll back the daily counter and card award if another claim won.
+                        raise RuntimeError("Character drop was already claimed or expired.")
         drop_id = drop['message_id']
         local_drop = active_card_drops.get(drop_id)
         if local_drop:
@@ -1633,6 +1665,16 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Could not send claimed card: {e}")
         await _safe_reply_text(msg, caption, parse_mode='HTML', reply_markup=keyboard)
+
+
+async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Serialize claims in a chat so in-memory fallback drops have one winner too."""
+    chat = update.effective_chat
+    if chat is None:
+        return await _mm_cmd_impl(update, context)
+    lock = card_claim_locks.setdefault(chat.id, asyncio.Lock())
+    async with lock:
+        return await _mm_cmd_impl(update, context)
 
 
 @restricted_command
@@ -5190,8 +5232,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         quiz = active_high_rarity_quizzes.get(query.message.message_id if query.message else None)
         if not quiz or quiz.get("used"):
             return await query.answer("ဒီရွေးချယ်မှုကို အသုံးပြုပြီးပါပြီ။ နောက်ကတ်ကို စောင့်ပါ။", show_alert=True)
-        if time.time() - quiz.get("created_at", 0) > 180:
+        if time.time() >= quiz.get("expires_at", quiz.get("created_at", 0) + 50):
+            quiz["used"] = True
             active_high_rarity_quizzes.pop(query.message.message_id, None)
+            try:
+                await query.edit_message_text(
+                    "⌛ အချိန် 50 စက္ကန့် ပြည့်သွားပါပြီ။ ကဒ်သက်တမ်းကုန်သွားပါပြီ။",
+                    reply_markup=None
+                )
+            except Exception:
+                pass
             return await query.answer("ဒီမေးခွန်း သက်တမ်းကုန်သွားပါပြီ။ နောက်ကတ်ကို စောင့်ပါ။", show_alert=True)
         quiz["used"] = True
         selected = int(query.data.rsplit("_", 1)[1])
