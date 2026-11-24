@@ -175,6 +175,7 @@ MAIN_GROUP_LINK = "https://t.me/Kachi_sGroup"
 group_threshold = {}
 pending_gifts = {}
 active_card_drops = {}
+active_high_rarity_quizzes = {}  # quiz message_id -> card + random correct choice
 pending_catch_targets = {}  # (chat_id, user_id) -> spawned card message ID after .k reveal
 card_drop_locks = {}
 tg_game_task = None
@@ -726,7 +727,7 @@ def restricted_command(func):
                             if msg:
                                 try:
                                     await _safe_reply_text(msg, 
-                                        f"❌ <b>You are banned from using this bot.</b>\n📝 Reason: {reason}",
+                                        f"❌ You are banned from using this bot.\n📝 Reason: {reason}",
                                         parse_mode="HTML"
                                     )
                                 except Exception:
@@ -741,7 +742,7 @@ def restricted_command(func):
                             if msg:
                                 try:
                                     await _safe_reply_text(msg, 
-                                        f"🔇 <b>You are muted from using this bot.</b>\n⏳ Time remaining: {time_str}\n📝 Reason: {reason}",
+                                        f"🔇 You are muted from using this bot.\n⏳ Time remaining: {time_str}\n📝 Reason: {reason}",
                                         parse_mode="HTML"
                                     )
                                 except Exception:
@@ -823,13 +824,13 @@ async def register_user_group(user, chat, context: ContextTypes.DEFAULT_TYPE = N
                         pass
 
                     adder_text = get_mention(added_id, added_name or "User") if added_id else "—"
-                    log_text = f"""🏰 <b>New Group Added</b>
+                    log_text = f"""🏰 New Group Added
 
-🔹 <b>Group Name:</b> {chat.title or 'Group'}
-👥 <b>Members:</b> {member_count}
-🆔 <b>Group ID:</b> <code>{chat_id}</code>
-🔗 <b>Link:</b> {invite_link}
-👤 <b>Added By:</b> {adder_text}"""
+🔹 Group Name: {chat.title or 'Group'}
+👥 Members: {member_count}
+🆔 Group ID: <code>{chat_id}</code>
+🔗 Link: {invite_link}
+👤 Added By: {adder_text}"""
                     try:
                         asyncio.create_task(context.bot.send_message(ADMIN_ID, log_text, parse_mode="HTML", disable_web_page_preview=True))
                     except Exception:
@@ -994,7 +995,7 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
                 return await _safe_reply_text(msg, 
                     f"⏳ မင်္ဂလာပါ {get_mention(user.id, display_name)}၊ /pre ကို တစ်နေ့လျှင် 3 ကြိမ်သာ ဖောက်ယူနိုင်ပါသည်။\n"
-                    f"⏱ ကျန်ရှိသောအချိန်: <b>{time_str}</b>",
+                    f"⏱ ကျန်ရှိသောအချိန်: {time_str}",
                     parse_mode="HTML"
                 )
 
@@ -1047,7 +1048,7 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🌟 Rarity - {r_display}
 📚 Collection - {col_name}
 🩸 Kachi Value ({coin_value})
-   🐠 Global Drops - <b>{global_drop_count}</b> 
+   🐠 Global Drops - {global_drop_count} 
 
 ▰▰▱▱▰▰▱▱
 ❄Check /kc ❄"""
@@ -1096,7 +1097,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 try:
                                     asyncio.create_task(context.bot.send_message(
                                         inviter_id,
-                                        f"🎉 <b>New Referral!</b>\n{get_mention(user.id, user.first_name)} joined using your referral link. You received <b>+200 Kachi</b> 🩸",
+                                        f"🎉 New Referral!\n{get_mention(user.id, user.first_name)} joined using your referral link. You received +200 Kachi 🩸",
                                         parse_mode="HTML"
                                     ))
                                 except Exception:
@@ -1116,8 +1117,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     target_name = target_row['name'] if target_row else "User"
 
                 return await _safe_reply_text(update.effective_message, 
-                    f"💸 <b>Kachi Transfer</b>\n\n"
-                    f"You are sending Kachi to <b>{target_name}</b> (ID: <code>{target_id}</code>).\n"
+                    f"💸 Kachi Transfer\n\n"
+                    f"You are sending Kachi to {target_name} (ID: <code>{target_id}</code>).\n"
                     f"Please enter the amount of Kachi you want to send:",
                     parse_mode="HTML"
                 )
@@ -1149,15 +1150,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🌺 Welcome to Kachi Card GAME BOT!
 
-📌 <b>How to Use / အသုံးပြုနည်း</b>
+📌 How to Use / အသုံးပြုနည်း
 
-<b>မြန်မာ</b>
+မြန်မာ
 - Bot ကို Group ထဲသို့ ထည့်ပါ။
 - Group ထဲတွင် စာများပေးပို့ပါ။ သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက Character Card အလိုအလျောက် ကျလာပါမည်။
 - ကတ်ကျလာပါက ကတ်ကို Reply ပြန်ပြီး <code>.k</code> ရိုက်ပါ။ Character Name ပေါ်လာပါမည်။ ထို့နောက် <code>/mm [name]</code> ဖြင့် ကတ်ကိုဖမ်းပါ။
 - Leaderboard ကြည့်ရန် /ktop ကို အသုံးပြုပါ။
 
-<b>English</b>
+English
 - Add the bot to your group.
 - Send messages in the group. A Character Card will drop automatically when the message limit is reached.
 - When a card drops, reply to that card and type <code>.k</code> to reveal the character name. Then catch it using <code>/mm [name]</code>.
@@ -1236,7 +1237,7 @@ async def kdaily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
                 return await _safe_reply_text(msg, 
                     f"⏳ မင်္ဂလာပါ {get_mention(user.id, display_name)}၊ /kdaily ဆုလက်ဆောင်ကို 24 နာရီမှ တစ်ကြိမ်သာ ထုတ်ယူနိုင်ပါသည်။\n"
-                    f"⏱ ကျန်ရှိသောအချိန်: <b>{time_str}</b>",
+                    f"⏱ ကျန်ရှိသောအချိန်: {time_str}",
                     parse_mode="HTML"
                 )
 
@@ -1244,10 +1245,10 @@ async def kdaily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await conn.execute("UPDATE users SET coins = $1, last_kdaily = $2 WHERE user_id = $3", new_coins, now, user.id)
 
     await _safe_reply_text(msg, 
-        f"🎁 <b>Daily Kachi Claimed Successfully!</b>\n\n"
+        f"🎁 Daily Kachi Claimed Successfully!\n\n"
         f"👤 User: {get_mention(user.id, display_name)}\n"
-        f"💎 Reward: <b>+1000 Kachi</b> 🩸\n"
-        f"💰 Total Balance: <b>{new_coins}</b> Kachi\n\n"
+        f"💎 Reward: +1000 Kachi 🩸\n"
+        f"💰 Total Balance: {new_coins} Kachi\n\n"
         f"<i>ကျေးဇူးတင်ပါတယ်! မနက်ဖြန်လည်း ထပ်မံလာရောက် ထုတ်ယူနိုင်ပါပြီ ✨</i>",
         parse_mode="HTML"
     )
@@ -1305,7 +1306,7 @@ async def got_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r_display = get_rarity_display(r)
 
     await _safe_reply_text(update.effective_message, 
-        f"✅ Successfully added card <b>{card['name']}</b> (ID: <code>{card['card_id']}</code>, Rarity: {r_display}) to your inventory!",
+        f"✅ Successfully added card {card['name']} (ID: <code>{card['card_id']}</code>, Rarity: {r_display}) to your inventory!",
         parse_mode="HTML"
     )
 
@@ -1330,11 +1331,11 @@ async def unlock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return await _safe_reply_text(update.effective_message, f"❌ Card ID <code>{context.args[0].strip()}</code> not found.", parse_mode="HTML")
 
             if not card['is_locked']:
-                return await _safe_reply_text(update.effective_message, f"i️ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) is already unlocked.", parse_mode="HTML")
+                return await _safe_reply_text(update.effective_message, f"i️ Card ID <code>{context.args[0].strip()}</code> ({card['name']}) is already unlocked.", parse_mode="HTML")
 
             await conn.execute("UPDATE cards SET is_locked = FALSE WHERE card_id = $1", context.args[0].strip())
             return await _safe_reply_text(update.effective_message, 
-                f"✅ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) has been successfully unlocked and can now drop in drops & Kboxes!",
+                f"✅ Card ID <code>{context.args[0].strip()}</code> ({card['name']}) has been successfully unlocked and can now drop in drops & Kboxes!",
                 parse_mode="HTML"
             )
 
@@ -1359,15 +1360,37 @@ async def lock_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return await _safe_reply_text(update.effective_message, f"❌ Card ID <code>{context.args[0].strip()}</code> not found.", parse_mode="HTML")
 
             if card['is_locked']:
-                return await _safe_reply_text(update.effective_message, f"i️ Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) is already locked.", parse_mode="HTML")
+                return await _safe_reply_text(update.effective_message, f"i️ Card ID <code>{context.args[0].strip()}</code> ({card['name']}) is already locked.", parse_mode="HTML")
 
             await conn.execute("UPDATE cards SET is_locked = TRUE WHERE card_id = $1", context.args[0].strip())
             return await _safe_reply_text(update.effective_message, 
-                f"🔒 Card ID <code>{context.args[0].strip()}</code> (<b>{card['name']}</b>) has been successfully locked and will no longer drop in drops & Kboxes!",
+                f"🔒 Card ID <code>{context.args[0].strip()}</code> ({card['name']}) has been successfully locked and will no longer drop in drops & Kboxes!",
                 parse_mode="HTML"
             )
 
-async def send_character_spawn(context, chat_id, card, reply_to_message_id=None):
+async def send_character_spawn(context, chat_id, card, reply_to_message_id=None, quiz_passed=False):
+    high_rarities = {"Kryora", "Shinsei", "Raiden", "Yugen"}
+    if card.get('rarity') in high_rarities and not quiz_passed:
+        correct = random.randint(1, 4)
+        buttons = [[
+            InlineKeyboardButton(str(number), callback_data=f"highquiz_{number}",
+                                 style="primary" if number == correct else "danger")
+            for number in range(1, 5)
+        ]]
+        try:
+            quiz_msg = await context.bot.send_message(
+                chat_id, "Spawn High Rarity 🍁\nPlease Choose Correct Button 💠",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+            active_high_rarity_quizzes[quiz_msg.message_id] = {
+                "chat_id": chat_id, "card": dict(card), "correct": correct,
+                "used": False, "created_at": time.time()
+            }
+            return quiz_msg
+        except Exception as e:
+            print(f"Could not send high-rarity quiz: {e}")
+            return None
+
     rarity_emoji = get_rarity_emoji(card.get('rarity') or 'Ten')
     caption = (f"{rarity_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
                "📯 Fast to Catch 🐌 /mm name")
@@ -1681,7 +1704,7 @@ async def render_kclist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE
         users = await conn.fetch("SELECT user_id, name, coins FROM users ORDER BY coins DESC, user_id ASC")
 
     if not users:
-        text = "👥 <b>User list is empty.</b>"
+        text = "👥 User list is empty."
         if isinstance(update_or_query, Update):
             return await _safe_reply_text(update_or_query.message, text, parse_mode="HTML")
         else:
@@ -1699,10 +1722,10 @@ async def render_kclist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE
     user_text_list = []
     for idx, u in enumerate(current_users, start=start_idx + 1):
         mention = get_mention(u['user_id'], u['name'] or "User")
-        user_text_list.append(f"{idx}. {mention} (ID: <code>{u['user_id']}</code>) — <b>{u['coins']}</b> Kachi 🩸")
+        user_text_list.append(f"{idx}. {mention} (ID: <code>{u['user_id']}</code>) — {u['coins']} Kachi 🩸")
 
     users_str = "\n".join(user_text_list)
-    text = f"""💰 <b>Kachi Users List (Page {page + 1}/{total_pages})</b>
+    text = f"""💰 Kachi Users List (Page {page + 1}/{total_pages})
 
 {users_str}"""
 
@@ -1735,9 +1758,9 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    text = """⚡ <b>Admin Commands</b>
+    text = """⚡ Admin Commands
 
-👑 <b>List:</b>
+👑 List:
 1. /kclist - View Kachi users list with pagination
 2. /k [user_id] [amount] - Add/remove Kachi
 3. /kcreset [amount] - Reset all users' Kachi balance to specified amount
@@ -1778,7 +1801,7 @@ async def kcreset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE users SET coins = $1", amount)
 
-    await _safe_reply_text(update.effective_message, f"✅ Successfully reset all users' Kachi balance to <b>{amount}</b>!", parse_mode="HTML")
+    await _safe_reply_text(update.effective_message, f"✅ Successfully reset all users' Kachi balance to {amount}!", parse_mode="HTML")
 
 def parse_time(time_str: str) -> int:
     time_str = time_str.lower().strip()
@@ -1828,7 +1851,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await conn.execute("UPDATE users SET muted_until = $1, mute_reason = $2 WHERE user_id = $3", until_timestamp, reason, target_id)
 
     await _safe_reply_text(msg, 
-        f"🔇 <b>Muted User from Bot</b>\n\n👤 User ID: <code>{target_id}</code>\n⏳ Duration: {time_str}\n📝 Reason: {reason}",
+        f"🔇 Muted User from Bot\n\n👤 User ID: <code>{target_id}</code>\n⏳ Duration: {time_str}\n📝 Reason: {reason}",
         parse_mode="HTML"
     )
 
@@ -1856,7 +1879,7 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await conn.execute("UPDATE users SET banned = TRUE, ban_reason = $1 WHERE user_id = $2", reason, target_id)
 
     await _safe_reply_text(msg, 
-        f"🔨 <b>Banned User from Bot</b>\n\n👤 User ID: <code>{target_id}</code>\n📝 Reason: {reason}",
+        f"🔨 Banned User from Bot\n\n👤 User ID: <code>{target_id}</code>\n📝 Reason: {reason}",
         parse_mode="HTML"
     )
 
@@ -1879,7 +1902,7 @@ async def umute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await conn.execute("UPDATE users SET muted_until = 0, mute_reason = NULL WHERE user_id = $1", target_id)
 
     await _safe_reply_text(msg, 
-        f"🔊 <b>Unmuted User from Bot</b>\n\n👤 User ID: <code>{target_id}</code>",
+        f"🔊 Unmuted User from Bot\n\n👤 User ID: <code>{target_id}</code>",
         parse_mode="HTML"
     )
 
@@ -1902,7 +1925,7 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await conn.execute("UPDATE users SET banned = FALSE, ban_reason = NULL WHERE user_id = $1", target_id)
 
     await _safe_reply_text(msg, 
-        f"🔓 <b>Unbanned User from Bot</b>\n\n👤 User ID: <code>{target_id}</code>",
+        f"🔓 Unbanned User from Bot\n\n👤 User ID: <code>{target_id}</code>",
         parse_mode="HTML"
     )
 
@@ -2009,34 +2032,34 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     muted_until = int(user_row['muted_until'] or 0) if user_row else 0
     mute_status = "Yes" if muted_until > int(time.time()) else "No"
     spam_status = await get_user_restriction_status(user.id)
-    spam_line = "🚫 <b>Spam Restriction</b> - No"
+    spam_line = "🚫 Spam Restriction - No"
     if spam_status and spam_status[0] == "spam":
         remaining = max(0, spam_status[1] - int(time.time()))
         mins, secs = divmod(remaining, 60)
-        spam_line = f"🚫 <b>Spam Restriction</b> - Yes | ⏳ {mins}m {secs}s remaining"
+        spam_line = f"🚫 Spam Restriction - Yes | ⏳ {mins}m {secs}s remaining"
 
     lines = [
-        "❄️ <b>Kachi USER profile</b>",
+        "❄️ Kachi USER profile",
         "━━━━━━━━━━━━━━━━━━",
-        f"◉▷ <b>Name</b> - {name_line}",
-        f"◉▷ <b>ID</b> - <code>{user.id}</code>",
-        f"◉▷ <b>Total Kachi Character</b> - <b>{total_cards}</b>",
+        f"◉▷ Name - {name_line}",
+        f"◉▷ ID - <code>{user.id}</code>",
+        f"◉▷ Total Kachi Character - {total_cards}",
         "━━━━━━━━━━━━━━━━━━",
         "",
     ]
     for rarity, emoji, label in rarity_order:
-        lines.append(f"❂ <i>Rarity</i> {emoji} : <b>{label}</b> - <b>{rarity_counts.get(rarity, 0)}</b>")
+        lines.append(f"❂ <i>Rarity</i> {emoji} : {label} - {rarity_counts.get(rarity, 0)}")
     lines.extend([
         "━━━━━━━━━━━━━━━━━━",
         "",
-        f"🚫 <b>Ban</b> - {ban_status}",
-        f"⭕ <b>Mute</b> - {mute_status}",
+        f"🚫 Ban - {ban_status}",
+        f"⭕ Mute - {mute_status}",
         spam_line,
         "",
-        f"❀ <b>Fav Card</b> - {html.escape(fav_card['name'])} (ID: {fav_card['card_id']})" if fav_card else "❀ <b>Fav Card</b> - —",
+        f"❀ Fav Card - {html.escape(fav_card['name'])} (ID: {fav_card['card_id']})" if fav_card else "❀ Fav Card - —",
         "",
-        f"✪ <b>Global Top ( )</b> #{global_rank or 1} ❄️",
-        f"✪ <b>Group Top ( )</b> #{group_rank if group_rank is not None else '—'} ❄️",
+        f"✪ Global Top ( ) #{global_rank or 1} ❄️",
+        f"✪ Group Top ( ) #{group_rank if group_rank is not None else '—'} ❄️",
     ])
     profile_text = "<blockquote>" + "\n".join(lines) + "</blockquote>"
 
@@ -2121,16 +2144,16 @@ async def check_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🌐 Global Rank - #{rank}
 🏷 Username - {username_str}
 ⬤ ID - <code>{target_id}</code>
-🩸 Kachi - <b>{coins}</b>"""
+🩸 Kachi - {coins}"""
 
     cards_info_list = []
     for c in user_card_rows[:5]:
-        count_str = f" <b>({c['amount']}x)</b>" if c['amount'] > 1 else ""
+        count_str = f" ({c['amount']}x)" if c['amount'] > 1 else ""
         rarity_emoji = get_rarity_emoji(c.get('rarity'))
         cards_info_list.append(f"{rarity_emoji} {c['name']} ( <code>{c['card_id']}</code> ){count_str}")
 
     cards_info = "\n".join(cards_info_list) if cards_info_list else "<i>No cards yet.</i>"
-    full_text = f"{text_header}\n\n❄ <b>Owned Cards</b>\n\n{cards_info}"
+    full_text = f"{text_header}\n\n❄ Owned Cards\n\n{cards_info}"
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{target_id}", style="success")]
@@ -2256,9 +2279,9 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:
                         asyncio.create_task(context.bot.send_message(
                             winner['user_id'],
-                            f"🏆 <b>Daily KGAME Top Winner!</b>\n\n"
+                            f"🏆 Daily KGAME Top Winner!\n\n"
                             f"Congratulations! You ranked #{idx+1} in Daily KGAME Top.\n"
-                            f"🎁 Reward: <b>+{prize} Kachi</b> 🩸",
+                            f"🎁 Reward: +{prize} Kachi 🩸",
                             parse_mode="HTML"
                         ))
                     except Exception:
@@ -2392,7 +2415,7 @@ async def admin_coin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action_text = "added" if amount >= 0 else "deducted"
         await _safe_reply_text(update.effective_message, 
             f"✅ {abs(amount)} Kachi {action_text} to {get_mention(target_id, new_row['name'])}.\n"
-            f"💰 Current Kachi: <b>{new_row['coins']}</b>",
+            f"💰 Current Kachi: {new_row['coins']}",
             parse_mode="HTML"
         )
     except (IndexError, ValueError):
@@ -2780,7 +2803,7 @@ async def add_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard_rows.insert(2, [InlineKeyboardButton("🎀 Birthday Special", callback_data=f"addrarity_{user.id}_Birthday Special", style="primary")])
 
     await _safe_reply_text(update.effective_message, 
-        f"🎴 <b>Card Info Ready:</b>\n"
+        f"🎴 Card Info Ready:\n"
         f"🆔 ID: <code>{card_id}</code>\n"
         f"🏷 Name: {card_name}\n\n"
         f"Please select rarity:",
@@ -3073,7 +3096,7 @@ async def import_character_catcher_forward(update: Update, context: ContextTypes
     if c_type == "video":
         rarities = [[InlineKeyboardButton("🦠 Kryora (Video Only)", callback_data=f"ccrarity_{user.id}_Kryora", style="primary")]] + rarities
     await _safe_reply_text(msg, 
-        f"🎴 <b>Forward Card Ready</b>\n\n🆔 ID: <code>{card_id}</code>\n🏷 Name: {html.escape(card_name)}\n\nRarity ရွေးပါ:",
+        f"🎴 Forward Card Ready\n\n🆔 ID: <code>{card_id}</code>\n🏷 Name: {html.escape(card_name)}\n\nRarity ရွေးပါ:",
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rarities)
     )
 
@@ -3121,10 +3144,10 @@ async def ttcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 locked_kryora_count = len(locked_kryora)
 
         await status_msg.edit_text(
-            "✅ <b>Card ownership audit completed.</b>\\n\\n"
-            f"👥 Users corrected: <b>{affected_users}</b>\\n"
-            f"🎴 Card records corrected: <b>{affected_rows}</b>\\n"
-            f"🔒 Kryora cards auto-locked: <b>{locked_kryora_count}</b>\\n"
+            "✅ Card ownership audit completed.\\n\\n"
+            f"👥 Users corrected: {affected_users}\\n"
+            f"🎴 Card records corrected: {affected_rows}\\n"
+            f"🔒 Kryora cards auto-locked: {locked_kryora_count}\\n"
             "📌 No user can keep more than 3 copies of the same card.",
             parse_mode="HTML"
         )
@@ -3222,7 +3245,7 @@ async def del_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await conn.execute("DELETE FROM cards WHERE card_id = $1", target_card_id)
             await conn.execute("UPDATE users SET selected_card_id = NULL WHERE selected_card_id = $1", target_card_id)
 
-    await _safe_reply_text(update.effective_message, f"✅ Card ID <code>{target_card_id}</code> (<b>{card_name}</b>) deleted successfully.", parse_mode="HTML")
+    await _safe_reply_text(update.effective_message, f"✅ Card ID <code>{target_card_id}</code> ({card_name}) deleted successfully.", parse_mode="HTML")
 
 @restricted_command
 async def set_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3251,7 +3274,7 @@ async def set_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await conn.execute("UPDATE users SET selected_card_id = $1 WHERE user_id = $2", target_card_id, user.id)
 
-    await _safe_reply_text(update.effective_message, f"✅ Active profile card changed to <b>{has_card['name']}</b> for /kc.", parse_mode="HTML")
+    await _safe_reply_text(update.effective_message, f"✅ Active profile card changed to {has_card['name']} for /kc.", parse_mode="HTML")
 
 @restricted_command
 async def khmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3262,7 +3285,7 @@ async def khmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.message_id
     await register_user_group(user, chat, context)
 
-    text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
+    text = "🎯 Select Rarity Mode for /kc\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond", style="primary"),
@@ -3369,8 +3392,8 @@ async def render_kshop_card(query, context, user_id, rarity, index):
 🎬 Type - {card['type'].upper()}
 🌟 Rarity - {r_display}
 📚 Collection - {col_name}
-🩸 Kachi Price - <b>{price}</b>
-   🐠 Global Drops - <b>{global_drop_count}</b>
+🩸 Kachi Price - {price}
+   🐠 Global Drops - {global_drop_count}
 
 ▰▰▱▱▰▰▱▱▰▰ ({index + 1}/{len(cards)})"""
 
@@ -3407,63 +3430,67 @@ async def kgift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     sender = update.effective_user
     chat = update.effective_chat
-    msg_id = update.message.message_id
     reply_msg = update.message.reply_to_message
-
     if not reply_msg or not reply_msg.from_user or reply_msg.from_user.is_bot:
         return await _safe_reply_text(update.effective_message, "❌ Reply to a user's message to send a gift.")
-
     receiver = reply_msg.from_user
     if sender.id == receiver.id:
         return await _safe_reply_text(update.effective_message, "❌ Cannot send gifts to yourself.")
+    if not context.args:
+        return await _safe_reply_text(update.effective_message,
+            "❌ Usage: Reply to a user and use /kgift card_id, /kgift card_id2x, or /kgift id1 id2 id3.\nMaximum: 3 cards per gift.")
+
+    requested = []
+    for token in context.args:
+        token = token.strip()
+        m = re.fullmatch(r"(.+?)([1-3])x", token, re.IGNORECASE)
+        if m:
+            card_id, amount = m.group(1), int(m.group(2))
+        else:
+            card_id, amount = token, 1
+        requested.append((card_id, amount))
+    combined = {}
+    for card_id, amount in requested:
+        combined[card_id] = combined.get(card_id, 0) + amount
+    requested = list(combined.items())
+    if sum(amount for _, amount in requested) > 3:
+        return await _safe_reply_text(update.effective_message, "❌ တစ်ကြိမ်လျှင် အများဆုံး ကတ် ၃ ကတ်သာ Gift ပေးနိုင်ပါတယ်။")
 
     await register_user_group(sender, chat, context)
     await register_user_group(receiver, chat, context)
-
-    if not context.args:
-        return await _safe_reply_text(update.effective_message, "❌ Usage: Reply with `/kgift [card_id]`", parse_mode="Markdown")
-
-    card_id = context.args[0].strip()
+    gift_cards = []
     async with db_pool.acquire() as conn:
-        card = await conn.fetchrow("SELECT card_id, name, type, file_id, collection FROM cards WHERE card_id = $1", card_id)
-        if not card:
-            return await _safe_reply_text(update.effective_message, f"❌ Card ID <code>{card_id}</code> not found.", parse_mode="HTML")
+        for card_id, amount in requested:
+            card = await conn.fetchrow("SELECT card_id, name, type, file_id, collection FROM cards WHERE card_id = $1", card_id)
+            if not card:
+                return await _safe_reply_text(update.effective_message, f"❌ Card ID {html.escape(card_id)} not found.")
+            owned = await conn.fetchrow("SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2", sender.id, card_id)
+            if not owned or owned["amount"] < amount:
+                return await _safe_reply_text(update.effective_message,
+                    f"❌ You do not own {amount} copy/copies of Card ID {html.escape(card_id)} ({html.escape(card['name'])}).")
+            gift_cards.append({"card_id": str(card["card_id"]), "card_name": card["name"],
+                "type": card["type"], "file_id": card["file_id"],
+                "collection": card.get("collection") or "🎞 Ope Ope No Mi [ 🩺]", "amount": amount})
 
-        user_card = await conn.fetchrow("SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2", sender.id, card_id)
-        if not user_card or user_card['amount'] <= 0:
-            return await _safe_reply_text(update.effective_message, f"❌ You do not own Card ID <code>{card_id}</code> (<b>{card['name']}</b>).", parse_mode="HTML")
-
-    col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
-    text = f"""🎁 <b>Kachi Card Gift Transfer</b>
-
-👤 <b>Sender:</b> {get_mention(sender.id, sender.first_name)}
-👤 <b>Receiver:</b> {get_mention(receiver.id, receiver.first_name)}
-
-🎴 <b>Card Info:</b>
-🏷️ <b>Name:</b> {card['name']}
-🆔 <b>Card ID:</b> <code>{card['card_id']}</code>
-📚 <b>Collection:</b> {col_name}
-
-<i>Click button below to confirm.</i>"""
-
+    lines = ["🎁 Kachi Card Gift Transfer", "",
+        f"👤 Sender: {get_mention(sender.id, sender.first_name)}",
+        f"👤 Receiver: {get_mention(receiver.id, receiver.first_name)}", "", "🎴 Card Info:"]
+    for item in gift_cards:
+        qty = f" ×{item['amount']}" if item["amount"] > 1 else ""
+        lines.append(f"🏷️ {html.escape(item['card_name'])} — ID: <code>{html.escape(item['card_id'])}</code>{qty}")
+    lines.extend(["", "Click button below to confirm."])
+    text = "\n".join(lines)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Cancel ❌", callback_data=f"gift_cancel_{sender.id}", style="danger"),
         InlineKeyboardButton("Confirm Gift 🎁", callback_data=f"gift_confirm_{sender.id}", style="success")
     ]])
-
-    if card['type'] == 'photo':
-        sent_msg = await context.bot.send_photo(chat_id=chat.id, photo=card['file_id'], caption=text, parse_mode="HTML", reply_markup=keyboard)
+    preview = gift_cards[0]
+    if preview["type"] == "photo":
+        sent_msg = await context.bot.send_photo(chat_id=chat.id, photo=preview["file_id"], caption=text, parse_mode="HTML", reply_markup=keyboard)
     else:
-        sent_msg = await context.bot.send_video(chat_id=chat.id, video=card['file_id'], caption=text, parse_mode="HTML", reply_markup=keyboard)
-
-    pending_gifts[sent_msg.message_id] = {
-        "type": "card",
-        "sender_id": sender.id,
-        "receiver_id": receiver.id,
-        "receiver_name": receiver.first_name,
-        "card_id": card_id,
-        "card_name": card['name']
-    }
+        sent_msg = await context.bot.send_video(chat_id=chat.id, video=preview["file_id"], caption=text, parse_mode="HTML", reply_markup=keyboard)
+    pending_gifts[sent_msg.message_id] = {"type": "card", "sender_id": sender.id,
+        "receiver_id": receiver.id, "receiver_name": receiver.first_name, "cards": gift_cards}
 
 async def rngift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bot-owner-only card grant; does not deduct cards from the admin."""
@@ -3540,11 +3567,11 @@ async def rngift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """, target_id, card_id, amount)
 
     details = "\n".join(
-        f"• <b>{found[cid]['name']}</b> — <code>{cid}</code> ×{amount}"
+        f"• {found[cid]['name']} — <code>{cid}</code> ×{amount}"
         for cid, amount in combined.items()
     )
     await _safe_reply_text(msg, 
-        f"✅ <b>Admin Gift Successful</b>\n\n"
+        f"✅ Admin Gift Successful\n\n"
         f"👤 User ID: <code>{target_id}</code>\n"
         f"🎴 Cards granted:\n{details}\n\n"
         f"<i>Admin inventory was not changed.</i>",
@@ -3637,7 +3664,7 @@ HAREM PAGE{mode_title} ({page + 1}/{total_pages})"""
     content_blocks = ["Collection"]
     for col_name, cards_in_col in collections_dict.items():
         content_blocks.append("")
-        content_blocks.append(f"🍀 <b>{col_name}</b>\n━━━━━━━━━━━━━━━━━━")
+        content_blocks.append(f"🍀 {col_name}\n━━━━━━━━━━━━━━━━━━")
         for c in cards_in_col:
             r_emoji = get_rarity_emoji(c.get('rarity'))
             count_str = f" ({c['amount']}x)" if c['amount'] > 1 else " (1x)"
@@ -3730,7 +3757,7 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_link = f"tg://openmessage?chat_id={sess['chat_id']}&message_id={sess['message_id']}"
         
         warning_text = (
-            f"⚠️ <b>အရင် kslot မပြီးသေးပါခင်ဗျာ!</b>\n"
+            f"⚠️ အရင် kslot မပြီးသေးပါခင်ဗျာ!\n"
             f"ကျေးဇူးပြု၍ အောက်ပါလင့်ခ်သို့ သွားရောက်၍ အဆုံးသတ်ပေးပါရန် -\n"
             f"🔗 <a href=\"{msg_link}\">Go to Active Kslot Message</a>"
         )
@@ -3742,8 +3769,8 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - last_kslot < cooldown_duration:
         remaining = int(cooldown_duration - (now - last_kslot))
         return await _safe_reply_text(msg, 
-            f"⏳ မင်္ဂလာပါ {get_mention(user.id, user.first_name)}၊ /kslot ကို တစ်ပွဲပြီးလျှင် <b>{cooldown_duration} စက္ကန့်</b> စောင့်ဆိုင်းပေးပါ။\n"
-            f"⏱ ကျန်ရှိသောအချိန်: <b>{remaining}s</b>",
+            f"⏳ မင်္ဂလာပါ {get_mention(user.id, user.first_name)}၊ /kslot ကို တစ်ပွဲပြီးလျှင် {cooldown_duration} စက္ကန့် စောင့်ဆိုင်းပေးပါ။\n"
+            f"⏱ ကျန်ရှိသောအချိန်: {remaining}s",
             parse_mode="HTML"
         )
 
@@ -3760,7 +3787,7 @@ async def kslot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard_rows.append([InlineKeyboardButton("🔥 All In 🩸", callback_data=f"kslot_bet_{user.id}_allin", style="success")])
 
-    text = f"""🎰 <b>Kachi Slot Machine Game</b>
+    text = f"""🎰 Kachi Slot Machine Game
 
 👤 Player: {get_mention(user.id, user.first_name)}
 👇 ကျေးဇူးပြု၍ ဂိမ်းစတင်ရန် လောင်းကြေးပမာဏ (Betting Amount) ကို ရွေးချယ်ပါ -"""
@@ -3808,7 +3835,7 @@ async def run_kslot_task(bot, chat_id, query, user_id, display_name, bet_amount)
 
                 if current_coins < bet_amount:
                     try:
-                        await query.answer(f"❌ Insufficient Kachi balance! Your current balance is <b>{current_coins}</b> Kachi.", show_alert=True)
+                        await query.answer(f"❌ Insufficient Kachi balance! Your current balance is {current_coins} Kachi.", show_alert=True)
                     except Exception:
                         pass
                     return
@@ -3818,7 +3845,7 @@ async def run_kslot_task(bot, chat_id, query, user_id, display_name, bet_amount)
 
         try:
             await query.edit_message_text(
-                f"🎰 <b>Spinning...</b>\n\n👤 Player: {get_mention(user_id, display_name)}\n🩸 Bet Amount: <b>{bet_amount}</b> Kachi\n\n<i>🎲 Rolling slot animation...</i>",
+                f"🎰 Spinning...\n\n👤 Player: {get_mention(user_id, display_name)}\n🩸 Bet Amount: {bet_amount} Kachi\n\n<i>🎲 Rolling slot animation...</i>",
                 parse_mode="HTML",
                 reply_markup=None
             )
@@ -3865,13 +3892,13 @@ async def run_kslot_task(bot, chat_id, query, user_id, display_name, bet_amount)
                 new_balance = updated_user['coins'] if updated_user else new_balance_after_bet + final_payout_total
 
         sym_str = " | ".join(symbols)
-        result_text = f"""🎰 <b>Kachi Slot Machine Result</b>
+        result_text = f"""🎰 Kachi Slot Machine Result
 
 👤 Player: {get_mention(user_id, display_name)}
-🎲 Symbols: <b>{sym_str}</b>
-📊 Score: <b>{score}</b>
-🎯 Result: <b>{result_type}</b> ({net_gain} Kachi)
-💰 Current Balance: <b>{new_balance}</b> Kachi ✨"""
+🎲 Symbols: {sym_str}
+📊 Score: {score}
+🎯 Result: {result_type} ({net_gain} Kachi)
+💰 Current Balance: {new_balance} Kachi ✨"""
 
         try:
             await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=None)
@@ -3895,8 +3922,8 @@ async def kbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - last_kbox < 35:
         remaining = int(35 - (now - last_kbox))
         return await _safe_reply_text(msg, 
-            f"⏳ မင်္ဂလာပါ {get_mention(user.id, user.first_name)}၊ /kbox ကို တစ်ပွဲပြီးလျှင် <b>35 စက္ကန့်</b> စောင့်ဆိုင်းပေးပါ။\n"
-            f"⏱ ကျန်ရှိသောအချိန်: <b>{remaining}s</b>",
+            f"⏳ မင်္ဂလာပါ {get_mention(user.id, user.first_name)}၊ /kbox ကို တစ်ပွဲပြီးလျှင် 35 စက္ကန့် စောင့်ဆိုင်းပေးပါ။\n"
+            f"⏱ ကျန်ရှိသောအချိန်: {remaining}s",
             parse_mode="HTML"
         )
     kbox_cooldowns[user.id] = now
@@ -3926,7 +3953,7 @@ async def kbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
             return await _safe_reply_text(msg, 
                 f"⏳ မင်္ဂလာပါ {get_mention(user.id, display_name)}၊ /kbox ကို တစ်နေ့လျှင် 7 ကြိမ်သာ ဖွင့်လှစ်နိုင်ပါသည်။\n"
-                f"⏱ ကျန်ရှိသောအချိန်: <b>{time_str}</b>",
+                f"⏱ ကျန်ရှိသောအချိန်: {time_str}",
                 parse_mode="HTML"
             )
 
@@ -3948,7 +3975,7 @@ async def ksearch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.message_id
     await register_user_group(user, chat, context)
 
-    text = "🔍 <b>Global Card Search (Ksearch)</b>\n\nClick the button below to browse all cards available in the bot database:"
+    text = "🔍 Global Card Search (Ksearch)\n\nClick the button below to browse all cards available in the bot database:"
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Global Search 🔎", switch_inline_query_current_chat="ksearch", style="primary")]
     ])
@@ -3995,12 +4022,12 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
             caption = f"""❀ Global Card Search 🔎
 
-✿ Card Name - <b>{c['name']}</b>
+✿ Card Name - {c['name']}
       ☘ ID - <code>{c['card_id']}</code>
 ✿ Rarity - {r_display}
 ✿ Collection - {col_name}
 
-⌘ Global Drops - <b>{global_drop_count}</b>"""
+⌘ Global Drops - {global_drop_count}"""
 
             if c['type'] == 'photo':
                 results.append(
@@ -4060,12 +4087,12 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             owner_mention = get_mention(target_id, owner_name)
             caption = f"""❀ Harem Owner ❝ {owner_mention} ❞
 
-✿ Card Name - <b>{c['name']}</b>{amount_str}
+✿ Card Name - {c['name']}{amount_str}
       ☘ ID - <code>{c['card_id']}</code>
 ✿ Rarity - {r_display}
 ✿ Collection - {col_name}
 
-⌘ Global Drops - <b>{global_drop_count}</b>"""
+⌘ Global Drops - {global_drop_count}"""
             
             if c['type'] == 'photo':
                 results.append(
@@ -4114,7 +4141,7 @@ async def render_seelock_page(update_or_query, context: ContextTypes.DEFAULT_TYP
         cards = await conn.fetch("SELECT card_id, name, type, rarity, collection, is_locked FROM cards WHERE rarity = 'Yugen' ORDER BY card_id ASC")
 
     if not cards:
-        text = "🎴 <b>Yugen card list is empty.</b>"
+        text = "🎴 Yugen card list is empty."
         if isinstance(update_or_query, Update):
             return await _safe_reply_text(update_or_query.message, text, parse_mode="HTML")
         else:
@@ -4136,11 +4163,11 @@ async def render_seelock_page(update_or_query, context: ContextTypes.DEFAULT_TYP
             r_emoji = get_rarity_emoji(r)
             lock_str = "🔒 LOCKED" if c.get('is_locked') else "🔓 UNLOCKED"
             total_drops = await conn.fetchval("SELECT COALESCE(SUM(amount), 0) FROM user_cards WHERE card_id = $1", c['card_id'])
-            card_text_list.append(f"{idx}. {r_emoji} <b>{c['name']}</b> (ID: <code>{c['card_id']}</code>) | {lock_str} | Drops: <b>{total_drops}</b>")
+            card_text_list.append(f"{idx}. {r_emoji} {c['name']} (ID: <code>{c['card_id']}</code>) | {lock_str} | Drops: {total_drops}")
 
     cards_str = "\n".join(card_text_list)
 
-    text = f"""🎐 <b>Yugen Cards Lock Status (Page {page + 1}/{total_pages})</b>
+    text = f"""🎐 Yugen Cards Lock Status (Page {page + 1}/{total_pages})
 
 {cards_str}"""
 
@@ -4167,7 +4194,7 @@ async def render_cardlist_page(update_or_query, context: ContextTypes.DEFAULT_TY
         cards = await conn.fetch("SELECT card_id, name, type, rarity, collection, is_locked FROM cards ORDER BY card_id ASC")
 
     if not cards:
-        text = "🎴 <b>Card list is empty.</b>"
+        text = "🎴 Card list is empty."
         if isinstance(update_or_query, Update):
             return await _safe_reply_text(update_or_query.message, text, parse_mode="HTML")
         else:
@@ -4189,11 +4216,11 @@ async def render_cardlist_page(update_or_query, context: ContextTypes.DEFAULT_TY
         r_emoji = get_rarity_emoji(r)
         lock_status = " 🔒[LOCKED]" if c.get('is_locked') else ""
         col_name = c.get('collection') or "—"
-        card_text_list.append(f"{idx}. {r_emoji} <b>{c['name']}</b> (ID: <code>{c['card_id']}</code>) [{type_emoji} {c['type'].upper()}]{lock_status}\n     └ {col_name}")
+        card_text_list.append(f"{idx}. {r_emoji} {c['name']} (ID: <code>{c['card_id']}</code>) [{type_emoji} {c['type'].upper()}]{lock_status}\n     └ {col_name}")
 
     cards_str = "\n".join(card_text_list)
 
-    text = f"""📜 <b>Kachi Card List (Page {page + 1}/{total_pages})</b>
+    text = f"""📜 Kachi Card List (Page {page + 1}/{total_pages})
 📌 <i>Use <code>/card [card_id]</code> for details.</i>
 
 {cards_str}"""
@@ -4249,7 +4276,7 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owners_text_list = []
     if top_owners:
         for idx, row in enumerate(top_owners, 1):
-            owners_text_list.append(f"☛ {get_mention(row['user_id'], row['name'])} — <b>{row['amount']}x</b>")
+            owners_text_list.append(f"☛ {get_mention(row['user_id'], row['name'])} — {row['amount']}x")
         owners_str = "\n".join(owners_text_list)
     else:
         owners_str = "☛ <i>No owners yet.</i>"
@@ -4257,7 +4284,7 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = card.get('rarity', 'Ten')
     r_display = get_rarity_display(r)
     col_name = card.get('collection') or "🎞 Ope Ope No Mi [ 🩺]"
-    lock_str = "\n🔒 <b>Status: Locked</b>" if card.get('is_locked') else ""
+    lock_str = "\n🔒 Status: Locked" if card.get('is_locked') else ""
 
     if r == 'Beyond':
         coin_value = "280000-300000"
@@ -4282,20 +4309,20 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         coin_value = "3000-5000"
 
-    caption_text = f"""🦋 <b>Here We Go Character Information !</b>
+    caption_text = f"""🦋 Here We Go Character Information !
 
-🐞 <b>Collection Name</b>
+🐞 Collection Name
 {col_name}
 ━━━━━━━━━━━━━━━━━━
-<b>{card['card_id']} - {card['name']}</b>
-<b>[ {get_rarity_emoji(r)} · {r_display} ]</b>
+{card['card_id']} - {card['name']}
+[ {get_rarity_emoji(r)} · {r_display} ]
 
-🌍 <b>GLOBAL DROP -</b> {global_drop_count}
+🌍 GLOBAL DROP - {global_drop_count}
 
-⚡ <b>TOP 10 OWNERS OF THIS CHARACTER !</b>
+⚡ TOP 10 OWNERS OF THIS CHARACTER !
 {owners_str}
 
-❀ <b>User Sell Price</b> - {coin_value}{lock_str}"""
+❀ User Sell Price - {coin_value}{lock_str}"""
 
     is_video = (card['type'] == 'video') or (str(card['file_id']).startswith("BAA"))
 
@@ -4328,7 +4355,7 @@ async def render_glist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE,
         groups = await conn.fetch("SELECT chat_id, title, added_by_id, added_by_name FROM groups")
 
     if not groups:
-        text = "🏰 <b>Group list is empty.</b>"
+        text = "🏰 Group list is empty."
         if isinstance(update_or_query, Update):
             return await _safe_reply_text(update_or_query.message, text, parse_mode="HTML")
         else:
@@ -4368,7 +4395,7 @@ async def render_glist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE,
         if g['added_by_id']:
             adder_text = get_mention(g['added_by_id'], g['added_by_name'] or "User")
 
-        block = f"""<b>{idx}. {g['title']}</b>
+        block = f"""{idx}. {g['title']}
 🆔 Gp ID: <code>{chat_id}</code>
 👥 Gp Member: {member_count}
 🔗 Gp Link: {invite_link}
@@ -4376,7 +4403,7 @@ async def render_glist_page(update_or_query, context: ContextTypes.DEFAULT_TYPE,
         group_blocks.append(block)
 
     groups_str = "\n\n".join(group_blocks)
-    text = f"""🏰 <b>Group List (Page {page + 1}/{total_pages})</b>
+    text = f"""🏰 Group List (Page {page + 1}/{total_pages})
 
 {groups_str}"""
 
@@ -4420,7 +4447,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_g_count = sum(1 for r in results if r)
 
     await _safe_reply_text(update.effective_message, 
-        f"📊 <b>Bot Stats:</b>\n\n👥 Users: {u_count}\n🏰 Groups: {active_g_count}",
+        f"📊 Bot Stats:\n\n👥 Users: {u_count}\n🏰 Groups: {active_g_count}",
         parse_mode="HTML"
     )
 
@@ -4521,8 +4548,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📤 Sender: {get_mention(user.id, sender_name)}
 📥 Recipient: {get_mention(target_id, target_name)}
-💎 Amount Transferred: <b>{amount}</b> Kachi
-💳 Remaining Balance: <b>{new_sender_coins}</b> Kachi
+💎 Amount Transferred: {amount} Kachi
+💳 Remaining Balance: {new_sender_coins} Kachi
 
 Status: Successful ✅
 🕒 Time: {time_str} UTC"""
@@ -4531,8 +4558,8 @@ Status: Successful ✅
 
 📤 Sender: {get_mention(user.id, sender_name)}
 📥 Recipient: {get_mention(target_id, target_name)}
-💎 Amount Transferred: <b>{amount}</b> Kachi
-💳 Current Balance: <b>{new_target_coins}</b> Kachi
+💎 Amount Transferred: {amount} Kachi
+💳 Current Balance: {new_target_coins} Kachi
 
 Status: Successful ✅
 🕒 Time: {time_str} UTC"""
@@ -4598,13 +4625,13 @@ Status: Successful ✅
                 pass
 
             username_str = f"@{user.username}" if user.username else "None"
-            log_text = f"""🚨 <b>Spam Detected!</b>
+            log_text = f"""🚨 Spam Detected!
 
-👤 <b>Spam Name:</b> {get_mention(user.id, user.first_name)}
-🏷 <b>Username:</b> {username_str}
-🆔 <b>User ID:</b> <code>{user.id}</code>
-🏰 <b>Group Name:</b> {chat.title or 'Group'}
-🔗 <b>Group Link:</b> {invite_link}"""
+👤 Spam Name: {get_mention(user.id, user.first_name)}
+🏷 Username: {username_str}
+🆔 User ID: <code>{user.id}</code>
+🏰 Group Name: {chat.title or 'Group'}
+🔗 Group Link: {invite_link}"""
 
             try:
                 asyncio.create_task(context.bot.send_message(ADMIN_ID, log_text, parse_mode="HTML", disable_web_page_preview=True))
@@ -4770,37 +4797,37 @@ def tg_game_keyboard(round_id, bot_username):
 def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွင့်ထားသည်"):
     return (
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🐅 <b>ကျားနဂါးတိုက်ပွဲ</b> 🐉\n"
-        "<b>TIGER  ⚔️  DRAGON</b>\n"
+        "🐅 ကျားနဂါးတိုက်ပွဲ 🐉\n"
+        "TIGER  ⚔️  DRAGON\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🐅 <b>ကျား TIGER</b>\n"
-        f"💰 <b>{round_state['tiger_total']:,} Kachi</b>\n\n"
-        "🐉 <b>နဂါး DRAGON</b>\n"
-        f"💰 <b>{round_state['dragon_total']:,} Kachi</b>\n"
+        "🐅 ကျား TIGER\n"
+        f"💰 {round_state['tiger_total']:,} Kachi\n\n"
+        "🐉 နဂါး DRAGON\n"
+        f"💰 {round_state['dragon_total']:,} Kachi\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏳ <b>{status}</b>\n"
-        "💎 အများဆုံးလောင်းကြေး — <b>100,000 Kachi</b>\n\n"
-        "👇 <b>အောက်က ခလုတ်နဲ့ ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ</b>"
+        f"⏳ {status}\n"
+        "💎 အများဆုံးလောင်းကြေး — 100,000 Kachi\n\n"
+        "👇 အောက်က ခလုတ်နဲ့ ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ"
     )
 
 
 def tg_result_text(round_state, tiger_label, dragon_label, result_label, winners):
     text = (
         "━━━━━━━━━━━━━━━━━━\n"
-        "🏁 <b>TIGER  VS  DRAGON — RESULT</b>\n"
+        "🏁 TIGER  VS  DRAGON — RESULT\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🐅 Tiger: <b>{tiger_label}</b>\n"
-        f"🐉 Dragon: <b>{dragon_label}</b>\n\n"
-        f"<b>{result_label}</b>\n\n"
-        f"🐅 Tiger Bet: <b>{round_state['tiger_total']:,}</b> Kachi\n"
-        f"🐉 Dragon Bet: <b>{round_state['dragon_total']:,}</b> Kachi\n\n"
+        f"🐅 Tiger: {tiger_label}\n"
+        f"🐉 Dragon: {dragon_label}\n\n"
+        f"{result_label}\n\n"
+        f"🐅 Tiger Bet: {round_state['tiger_total']:,} Kachi\n"
+        f"🐉 Dragon Bet: {round_state['dragon_total']:,} Kachi\n\n"
     )
     if winners:
-        text += "🏆 <b>WINNERS</b>\n" + " · ".join(winners)
+        text += "🏆 WINNERS\n" + " · ".join(winners)
     elif result_label.startswith("🤝"):
-        text += "🤝 <b>သရေဖြစ်သည် — လောင်းကြေး 2x ပြန်ရရှိပါသည်။</b>"
+        text += "🤝 သရေဖြစ်သည် — လောင်းကြေး 2x ပြန်ရရှိပါသည်။"
     else:
-        text += "🏆 <b>ဒီပွဲမှာ အနိုင်ရသူ မရှိပါ။</b>"
+        text += "🏆 ဒီပွဲမှာ အနိုင်ရသူ မရှိပါ။"
     return text
 
 
@@ -4960,7 +4987,7 @@ async def run_tg_game(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=TIGER_DRAGON_CHANNEL_ID,
-                text="🛑 <b>Tiger vs Dragon Game ရပ်နားလိုက်ပါပြီ။</b>",
+                text="🛑 Tiger vs Dragon Game ရပ်နားလိုက်ပါပြီ။",
                 parse_mode="HTML"
             )
         except Exception:
@@ -5053,9 +5080,9 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     await _safe_reply_text(msg, 
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"✅ <b>BET CONFIRMED</b>\n"
-        f"{side_name} ဘက် — <b>{amount:,} Kachi</b>\n"
-        f"💰 လက်ကျန် — <b>{updated['coins']:,} Kachi</b>\n"
+        f"✅ BET CONFIRMED\n"
+        f"{side_name} ဘက် — {amount:,} Kachi\n"
+        f"💰 လက်ကျန် — {updated['coins']:,} Kachi\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         "ပွဲရလဒ်ကို Channel မှာ ကြည့်နိုင်ပါတယ်။",
         parse_mode="HTML",
@@ -5102,14 +5129,14 @@ async def kdic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - last_game < 20:
         remaining = max(1, int(20 - (now - last_game)))
         return await _safe_reply_text(msg, 
-            f"⏳ နောက်တစ်ပွဲကစားရန် <b>{remaining} စက္ကန့်</b> စောင့်ပေးပါ။",
+            f"⏳ နောက်တစ်ပွဲကစားရန် {remaining} စက္ကန့် စောင့်ပေးပါ။",
             parse_mode="HTML"
         )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Small (1–3)", callback_data=f"kdic_side_{user.id}_small", style="primary"),
         InlineKeyboardButton("Big (4–6)", callback_data=f"kdic_side_{user.id}_big", style="primary"),
     ]])
-    sent = await _safe_reply_text(msg, "🎲 <b>Kachi Dice Game</b>\n\nSmall — 1 / 2 / 3\nBig — 4 / 5 / 6\n\nဘယ်ဘက်ကို ရွေးမလဲ?", parse_mode="HTML", reply_markup=keyboard)
+    sent = await _safe_reply_text(msg, "🎲 Kachi Dice Game\n\nSmall — 1 / 2 / 3\nBig — 4 / 5 / 6\n\nဘယ်ဘက်ကို ရွေးမလဲ?", parse_mode="HTML", reply_markup=keyboard)
     active_kdic_games[key] = {
         "owner_id": user.id, "chat_id": chat.id, "message_id": sent.message_id,
         "stage": "side", "side": None, "bet": 0
@@ -5153,12 +5180,39 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("🎲 Spin", callback_data=f"kdic_spin_{user.id}", style="success"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"kdic_cancel_{user.id}", style="danger"),
     ]])
-    sent = await _safe_reply_text(msg, f"🎲 <b>Dice Game Ready</b>\n\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\n\nSpin နှိပ်ပြီး ကစားပါ။", parse_mode="HTML", reply_markup=keyboard)
+    sent = await _safe_reply_text(msg, f"🎲 Dice Game Ready\n\nရွေးထားသောဘက် — {game['side'].title()}\nလောင်းကြေး — {amount:,} Kachi\n\nSpin နှိပ်ပြီး ကစားပါ။", parse_mode="HTML", reply_markup=keyboard)
     game["message_id"] = sent.message_id
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if query and query.data and query.data.startswith("highquiz_"):
+        quiz = active_high_rarity_quizzes.get(query.message.message_id if query.message else None)
+        if not quiz or quiz.get("used"):
+            return await query.answer("ဒီရွေးချယ်မှုကို အသုံးပြုပြီးပါပြီ။ နောက်ကတ်ကို စောင့်ပါ။", show_alert=True)
+        if time.time() - quiz.get("created_at", 0) > 180:
+            active_high_rarity_quizzes.pop(query.message.message_id, None)
+            return await query.answer("ဒီမေးခွန်း သက်တမ်းကုန်သွားပါပြီ။ နောက်ကတ်ကို စောင့်ပါ။", show_alert=True)
+        quiz["used"] = True
+        selected = int(query.data.rsplit("_", 1)[1])
+        active_high_rarity_quizzes.pop(query.message.message_id, None)
+        if selected != quiz["correct"]:
+            mention = get_mention(query.from_user.id, query.from_user.first_name)
+            try:
+                await query.edit_message_text(
+                    f"❌ {mention} သည် အမှားကို နှိပ်လိုက်ပါပြီ။\nနောက်ကတ်ကျမှ ထပ်ကောက်ပါ။",
+                    parse_mode="HTML", reply_markup=None
+                )
+            except Exception:
+                pass
+            return await query.answer("Wrong button!", show_alert=True)
+        try:
+            await query.edit_message_text("✅ မှန်ကန်ပါတယ်။ High Rarity ကတ် ပေါ်လာပါပြီ။", reply_markup=None)
+        except Exception:
+            pass
+        await query.answer("Correct! High Rarity card unlocked.")
+        await send_character_spawn(context, quiz["chat_id"], quiz["card"], quiz_passed=True)
+        return
     if query and query.data and query.data.startswith("kdic_"):
         data = query.data
         user = query.from_user
@@ -5186,7 +5240,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             game["side"] = side
             game["stage"] = "bet"
             await query.answer()
-            await query.edit_message_text(f"🎲 <b>{side.title()} ကို ရွေးပြီးပါပြီ။</b>\n\nလောင်းကြေးတင်ရန် — /kbet Kachi 1000\nဥပမာ — /kbet Kachi 5000", parse_mode="HTML", reply_markup=None)
+            await query.edit_message_text(f"🎲 {side.title()} ကို ရွေးပြီးပါပြီ။\n\nလောင်းကြေးတင်ရန် — /kbet Kachi 1000\nဥပမာ — /kbet Kachi 5000", parse_mode="HTML", reply_markup=None)
             return
         if action == "cancel":
             if game.get("stage") != "spin":
@@ -5196,7 +5250,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active_kdic_games.pop(key, None)
             kdic_cooldowns[owner_id] = time.time()
             await query.answer("လောင်းကြေး ပြန်အမ်းပြီးပါပြီ။")
-            return await query.edit_message_text(f"❌ <b>Game Cancelled</b>\n💰 {amount:,} Kachi ပြန်အမ်းပြီးပါပြီ။\n\n⏳ နောက်တစ်ပွဲကစားရန် 20 စက္ကန့် စောင့်ပေးပါ။", parse_mode="HTML", reply_markup=None)
+            return await query.edit_message_text(f"❌ Game Cancelled\n💰 {amount:,} Kachi ပြန်အမ်းပြီးပါပြီ။\n\n⏳ နောက်တစ်ပွဲကစားရန် 20 စက္ကန့် စောင့်ပေးပါ။", parse_mode="HTML", reply_markup=None)
         if action == "spin":
             if game.get("stage") != "spin":
                 return await query.answer("Spin လုပ်ရန် အဆင်သင့်မဖြစ်သေးပါ။", show_alert=True)
@@ -5215,8 +5269,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with db_pool.acquire() as conn:
                     row = await conn.fetchrow("SELECT coins FROM users WHERE user_id = $1", owner_id)
                 balance = int(row["coins"] or 0) if row else 0
-                result = "🎉 <b>YOU WIN!</b>" if won else "😢 <b>YOU LOSE!</b>"
-                result += f"\n\n🎲 ရလဒ် — <b>{value}</b>\nရွေးထားသောဘက် — <b>{game['side'].title()}</b>\nလောင်းကြေး — <b>{amount:,} Kachi</b>\nဆုငွေ — <b>{payout:,} Kachi</b>\n💰 လက်ကျန် — <b>{balance:,} Kachi</b>"
+                result = "🎉 YOU WIN!" if won else "😢 YOU LOSE!"
+                result += f"\n\n🎲 ရလဒ် — {value}\nရွေးထားသောဘက် — {game['side'].title()}\nလောင်းကြေး — {amount:,} Kachi\nဆုငွေ — {payout:,} Kachi\n💰 လက်ကျန် — {balance:,} Kachi"
                 active_kdic_games.pop(key, None)
                 kdic_cooldowns[owner_id] = time.time()
                 return await query.edit_message_text(
@@ -5308,7 +5362,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bet_amount = int(bet_token)
 
             if current_coins < bet_amount or bet_amount <= 0:
-                return await query.answer(f"❌ Insufficient Kachi balance! Your current balance is <b>{current_coins}</b> Kachi.", show_alert=True)
+                return await query.answer(f"❌ Insufficient Kachi balance! Your current balance is {current_coins} Kachi.", show_alert=True)
 
         active_kslot_sessions[user.id] = {
             "chat_id": chat_id,
@@ -5325,7 +5379,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await query.edit_message_text(
-                f"🎰 <b>Kachi Slot Machine Game</b>\n\n👤 Player: {get_mention(user.id, display_name)}\n🩸 Bet Amount: <b>{bet_amount}</b> Kachi\n\n<i>👇 ကျေးဇူးပြု၍ Spin သို့မဟုတ် Cancel ကို နှိပ်ပါ -</i>",
+                f"🎰 Kachi Slot Machine Game\n\n👤 Player: {get_mention(user.id, display_name)}\n🩸 Bet Amount: {bet_amount} Kachi\n\n<i>👇 ကျေးဇူးပြု၍ Spin သို့မဟုတ် Cancel ကို နှိပ်ပါ -</i>",
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
@@ -5348,7 +5402,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await query.edit_message_text(
-                "❌ <b>Kachi Slot Game Cancelled.</b>\n⏱ နောက်တစ်ကြိမ် ကစားရန် 15 စက္ကန့် စောင့်ဆိုင်းပေးပါ။",
+                "❌ Kachi Slot Game Cancelled.\n⏱ နောက်တစ်ကြိမ် ကစားရန် 15 စက္ကန့် စောင့်ဆိုင်းပေးပါ။",
                 parse_mode="HTML",
                 reply_markup=None
             )
@@ -5432,10 +5486,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg_id in pending_card_buys:
             del pending_card_buys[msg_id]
 
-        success_text = f"""✅ <b>Purchase Successful & Cards Removed!</b>
+        success_text = f"""✅ Purchase Successful & Cards Removed!
 
-👤 <b>Buyer:</b> {get_mention(buy_info['buyer_id'], user.first_name)}
-👤 <b>Seller:</b> {get_mention(seller_id, buy_info['seller_name'])}
+👤 Buyer: {get_mention(buy_info['buyer_id'], user.first_name)}
+👤 Seller: {get_mention(seller_id, buy_info['seller_name'])}
 
 🎴 Cards successfully removed from seller's inventory."""
 
@@ -5526,7 +5580,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id != allowed_uid:
             return await query.answer("❌ This is not for you!", show_alert=True)
         
-        text = "🎯 <b>Select Rarity Mode for /kc</b>\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
+        text = "🎯 Select Rarity Mode for /kc\n\nကျေးဇူးပြု၍ စုပြလိုသော Rarity တစ်ခုကို ရွေးချယ်ပေးပါ -"
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("♠ Beyond", callback_data=f"khset_{user.id}_Beyond", style="primary"),
@@ -5569,7 +5623,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await query.edit_message_text(
-                f"✅ <b>Successfully set rarity mode to {get_rarity_display(rarity)}!</b>\n\nယခုမှစ၍ `/kc` တွင် ဤ Rarity ကတ်များကိုသာ သီးသန့်ပြသပေးမည် ဖြစ်ပါသည်။",
+                f"✅ Successfully set rarity mode to {get_rarity_display(rarity)}!\n\nယခုမှစ၍ `/kc` တွင် ဤ Rarity ကတ်များကိုသာ သီးသန့်ပြသပေးမည် ဖြစ်ပါသည်။",
                 parse_mode="HTML"
             )
         except Exception:
@@ -5681,7 +5735,7 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
 
 
     if data == "menu_help":
-        help_text = """📖 <b>Help & Guidelines</b>
+        help_text = """📖 Help & Guidelines
 
 - Add the bot to your group and send messages. Character Cards will drop automatically when the message limit is reached.
 - /ktop - View the Global Leaderboard.
@@ -5697,7 +5751,7 @@ You can buy Kiwami / Shinsei / Yugen / Kami / Birthday Special rarity cards here
         return
 
     if data == "menu_kgift":
-        kgift_text = """🎁 <b>Gift Guidelines</b>
+        kgift_text = """🎁 Gift Guidelines
 
 Reply to a user's message and use:
 - /kgift [card_id] - Send the specified card (Example: /kgift 1201)."""
@@ -5715,10 +5769,10 @@ Reply to a user's message and use:
 
 🌺 Welcome to Kachi Card GAME BOT!
 
-📌 <b>How to Use</b>
+📌 How to Use
 - Add the bot to your group.
 - Send messages in the group. Character Cards will drop automatically when the message limit is reached.
-- When a card drops, tap <b>နာမည်ဖြေရန်</b> and enter the character name.
+- When a card drops, tap နာမည်ဖြေရန် and enter the character name.
 - Use /ktop to view the leaderboard."""
         keyboard = InlineKeyboardMarkup([
             [
@@ -5935,7 +5989,7 @@ Reply to a user's message and use:
         except Exception:
             pass
 
-        reward_notice = f"\n🎉 Received <b>+{added_reward_coins} Kachi</b> for adding card!" if (is_card_admin and user.id != ADMIN_ID) else ""
+        reward_notice = f"\n🎉 Received +{added_reward_coins} Kachi for adding card!" if (is_card_admin and user.id != ADMIN_ID) else ""
         try:
             await query.message.edit_text(
                 f"✅ Card added successfully!\n\n🆔 Card ID: <code>{card_id}</code>\n🎴 Name: {card_name}\n🌟 Rarity: {r_display}\n📚 Collection: {selected_collection}{lock_msg_note}{reward_notice}",
@@ -5988,7 +6042,7 @@ Reply to a user's message and use:
             return await query.answer("❌ Gift transfer expired.", show_alert=True)
 
         if action == "cancel":
-            cancel_text = "❌ <b>Gift transfer cancelled.</b>"
+            cancel_text = "❌ Gift transfer cancelled."
             try:
                 if query.message.caption:
                     await query.edit_message_caption(caption=cancel_text, parse_mode="HTML")
@@ -6003,37 +6057,55 @@ Reply to a user's message and use:
             receiver_id = gift_info["receiver_id"]
             receiver_name = gift_info["receiver_name"]
 
-            async with db_pool.acquire() as conn:
-                async with conn.transaction():
-                    card_id = gift_info["card_id"]
-                    card_name = gift_info["card_name"]
-
-                    s_card = await conn.fetchrow("SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2 FOR UPDATE", sender_id, card_id)
-                    if not s_card or s_card['amount'] <= 0:
-                        return await query.answer(f"❌ You no longer own Card ID {card_id}.", show_alert=True)
-
-                    receiver_card = await conn.fetchrow(
-                        "SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2 FOR UPDATE",
-                        receiver_id, card_id
-                    )
-                    receiver_amount = receiver_card["amount"] if receiver_card else 0
-                    if receiver_amount >= USER_CARD_MAX_PER_ID:
-                        return await query.answer(
-                            "❌ The receiver already owns 3 copies of this card.",
-                            show_alert=True
+            try:
+                async with db_pool.acquire() as conn:
+                    async with conn.transaction():
+                        cards_to_send = gift_info.get("cards") or [{
+                            "card_id": gift_info["card_id"], "card_name": gift_info["card_name"], "amount": 1
+                        }]
+                        # Validate all requested cards before making any ownership changes.
+                        for item in cards_to_send:
+                            card_id = str(item["card_id"])
+                            amount = int(item.get("amount", 1))
+                            sender_card = await conn.fetchrow(
+                                "SELECT amount FROM user_cards WHERE user_id=$1 AND card_id=$2 FOR UPDATE",
+                                sender_id, card_id
+                            )
+                            if not sender_card or sender_card["amount"] < amount:
+                                raise ValueError(f"You no longer own enough copies of Card ID {card_id}.")
+                            receiver_card = await conn.fetchrow(
+                                "SELECT amount FROM user_cards WHERE user_id=$1 AND card_id=$2 FOR UPDATE",
+                                receiver_id, card_id
+                            )
+                            receiver_amount = receiver_card["amount"] if receiver_card else 0
+                            if receiver_amount + amount > USER_CARD_MAX_PER_ID:
+                                raise ValueError(f"Receiver cannot own more than 3 copies of Card ID {card_id}.")
+                        success_lines = []
+                        for item in cards_to_send:
+                            card_id = str(item["card_id"])
+                            amount = int(item.get("amount", 1))
+                            card_name = item.get("card_name", card_id)
+                            await conn.execute(
+                                "UPDATE user_cards SET amount=amount-$1 WHERE user_id=$2 AND card_id=$3",
+                                amount, sender_id, card_id
+                            )
+                            await conn.execute(
+                                "DELETE FROM user_cards WHERE user_id=$1 AND card_id=$2 AND amount<=0",
+                                sender_id, card_id
+                            )
+                            added = await add_user_card_with_limit(conn, receiver_id, card_id, amount)
+                            if not added:
+                                raise ValueError(f"Could not transfer Card ID {card_id}.")
+                            await check_and_auto_lock_card(conn, card_id)
+                            qty = f" ×{amount}" if amount > 1 else ""
+                            success_lines.append(f"{html.escape(card_name)} (ID: <code>{html.escape(card_id)}</code>){qty}")
+                        success_text = (
+                            f"✅ {get_mention(sender_id, user.first_name)} sent the following card(s) to "
+                            f"{get_mention(receiver_id, receiver_name)}!\n\n" + "\n".join(success_lines)
                         )
-
-                    if s_card['amount'] == 1:
-                        await conn.execute("DELETE FROM user_cards WHERE user_id = $1 AND card_id = $2", sender_id, card_id)
-                    else:
-                        await conn.execute("UPDATE user_cards SET amount = amount - 1 WHERE user_id = $1 AND card_id = $2", sender_id, card_id)
-
-                    added = await add_user_card_with_limit(conn, receiver_id, card_id, 1)
-                    if not added:
-                        raise RuntimeError("Receiver card ownership limit reached")
-                    await check_and_auto_lock_card(conn, card_id)
-
-                    success_text = f"✅ {get_mention(sender_id, user.first_name)} sent <b>{card_name}</b> (ID: <code>{card_id}</code>) to {get_mention(receiver_id, receiver_name)}!"
+            except ValueError as e:
+                pending_gifts[msg_id] = gift_info
+                return await query.answer(str(e), show_alert=True)
 
             try:
                 if query.message.caption:
@@ -6120,9 +6192,9 @@ async def reset3x_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         affected_users = len({row["user_id"] for row in affected})
         affected_rows = len(affected)
         await _safe_reply_text(update.effective_message, 
-            "✅ <b>/reset3x completed</b>\n\n"
-            f"🎴 Card records corrected: <b>{affected_rows}</b>\n"
-            f"👤 Users affected: <b>{affected_users}</b>\n"
+            "✅ /reset3x completed\n\n"
+            f"🎴 Card records corrected: {affected_rows}\n"
+            f"👤 Users affected: {affected_users}\n"
             "📌 Each user now has at most 3 copies of each card.",
             parse_mode="HTML"
         )
