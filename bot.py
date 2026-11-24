@@ -7,6 +7,7 @@ import string
 import time
 import datetime
 import html
+import unicodedata
 import uuid
 import asyncpg
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto, InputMediaVideo, InlineQueryResultCachedPhoto, InlineQueryResultCachedVideo, ChatPermissions, CopyTextButton, Bot, Message, CallbackQuery
@@ -41,28 +42,38 @@ def _plain_text(value):
     return f"{_PLAIN_OPEN}{value}{_PLAIN_CLOSE}"
 
 def _mono_visible_text(value):
+    """Use Mono styling only for the explicitly approved command names."""
     if not isinstance(value, str):
         return value
 
-    # Keep Telegram links and the /mm command in ordinary ASCII text so links
-    # remain usable and Telegram can recognize /mm as a command. Preserve
-    # complete HTML anchors (including their visible link labels) as well.
+    # Only these command labels should appear in Unicode monospace.
+    # Every other message, command, name, link, and button label stays plain.
+    mono_commands = re.compile(
+        r'(?<![A-Za-z0-9_])/(?:kc|set|kgift|card|kachi|kbox|pre|khmode|kprofile)(?![A-Za-z0-9_])',
+        re.IGNORECASE,
+    )
     protected_pattern = re.compile(
         r'(<a\b[^>]*>.*?</a>'
         r'|https?://[^\s<>()]+'
-        r'|/[A-Za-z][A-Za-z0-9_]*(?:@[A-Za-z0-9_]+)?(?=\s|$)'
         r'|<[^>]*>'
         r'|&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);)',
         re.IGNORECASE | re.DOTALL,
     )
-    # Preserve explicitly marked character names as ordinary text.
+
+    # Keep explicitly marked plain-text segments unchanged.
     marker_pattern = re.compile(re.escape(_PLAIN_OPEN) + r"(.*?)" + re.escape(_PLAIN_CLOSE), re.DOTALL)
     protected_value = marker_pattern.sub(lambda m: "\x03" + m.group(1).replace("\x03", "") + "\x04", value)
+
     parts = protected_pattern.split(protected_value)
-    converted = ''.join(
-        part if protected_pattern.fullmatch(part) else part.translate(_MONO_TABLE)
-        for part in parts
-    )
+    converted_parts = []
+    for part in parts:
+        if protected_pattern.fullmatch(part):
+            converted_parts.append(part)
+        else:
+            converted_parts.append(
+                mono_commands.sub(lambda m: m.group(0).translate(_MONO_TABLE), part)
+            )
+    converted = ''.join(converted_parts)
     return re.sub(r"\x03(.*?)\x04", lambda m: m.group(1), converted, flags=re.DOTALL)
 
 # Apply Mono styling to outgoing bot messages and inline keyboard labels only.
@@ -1389,18 +1400,38 @@ async def spw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_character_spawn(context, chat.id, card, msg.message_id)
 
 
+def normalize_character_answer(value: str) -> str:
+    """Normalize character names to avoid false Wrong Name results from formatting differences."""
+    value = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", str(value or "")))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    # Ignore invisible formatting characters, case, punctuation, and repeated spaces.
+    value = "".join(ch for ch in value if unicodedata.category(ch) != "Cf")
+    value = value.casefold().strip()
+    return " ".join(re.findall(r"[\w]+", value, flags=re.UNICODE))
+
+
 @restricted_command
 async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
     if not context.args:
         return await msg.reply_text("Use: /mm character name", reply_to_message_id=msg.message_id)
-    requested = " ".join(" ".join(context.args).strip().split()).casefold()
+    requested = normalize_character_answer(" ".join(context.args))
+
+    # If /mm is sent as a reply to a spawned card, always check that exact card.
+    # Otherwise use the user's .k-selected card before falling back to the latest spawn.
+    replied_drop_id = (msg.reply_to_message.message_id
+                       if msg.reply_to_message and msg.reply_to_message.message_id in active_card_drops
+                       else None)
     pending_drop_id = pending_catch_targets.get((chat.id, user.id))
     pending_drop = active_card_drops.get(pending_drop_id) if pending_drop_id else None
-    found = ((pending_drop_id, pending_drop) if pending_drop and pending_drop.get('chat_id') == chat.id else
-             next(((mid, d) for mid, d in reversed(list(active_card_drops.items()))
-                  if d['chat_id'] == chat.id), None))
-    if not found:
+    if replied_drop_id is not None:
+        found = (replied_drop_id, active_card_drops.get(replied_drop_id))
+    elif pending_drop and pending_drop.get('chat_id') == chat.id:
+        found = (pending_drop_id, pending_drop)
+    else:
+        found = next(((mid, d) for mid, d in reversed(list(active_card_drops.items()))
+                      if d.get('chat_id') == chat.id and not d.get('ended') and time.time() < d.get('expires_at', 0)), None)
+    if not found or not found[1]:
         return await msg.reply_text("❄ No active character spawn right now.", reply_to_message_id=msg.message_id)
     drop_id, drop = found
     lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
@@ -1414,8 +1445,15 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if drop['ended'] or time.time() >= drop['expires_at']:
             return
         card = drop['card']
-        expected_name = " ".join(str(card['name']).strip().split()).casefold()
-        if requested != expected_name:
+        expected_name = normalize_character_answer(card.get('name', ''))
+        # Accept the complete name, or the first name only (e.g. "Hinata" for
+        # "Hinata Hyuuga"), while still ignoring case/punctuation/spacing differences.
+        first_name = expected_name.split()[0] if expected_name else ""
+        is_correct = bool(requested) and (
+            requested == expected_name or
+            (" " not in requested and requested == first_name)
+        )
+        if not is_correct:
             return await msg.reply_text("❌ Wrong character name. Try again!", reply_to_message_id=msg.message_id)
         try:
             async with db_pool.acquire() as conn:
