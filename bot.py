@@ -347,6 +347,23 @@ async def _init_db_once():
                 count INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, claim_date)
             );
+            CREATE TABLE IF NOT EXISTS active_card_drops (
+                chat_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL,
+                card_id TEXT,
+                card_name TEXT NOT NULL,
+                card_type TEXT,
+                file_id TEXT,
+                rarity TEXT,
+                collection TEXT,
+                expires_at DOUBLE PRECISION NOT NULL,
+                winner_id BIGINT,
+                winner_name TEXT,
+                ended BOOLEAN NOT NULL DEFAULT FALSE,
+                PRIMARY KEY (chat_id, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_active_card_drops_chat_expiry
+                ON active_card_drops(chat_id, expires_at);
             CREATE TABLE IF NOT EXISTS card_add_activity (
                 activity_id BIGSERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
@@ -1362,8 +1379,32 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None)
     except Exception as e:
         print(f"Could not send character spawn: {e}")
         return None
+    expires_at = time.time() + 180
     active_card_drops[msg.message_id] = {'chat_id': chat_id, 'card': card, 'winner_id': None,
-        'winner_name': None, 'ended': False, 'name_button_used': False, 'expires_at': time.time() + 180}
+        'winner_name': None, 'ended': False, 'name_button_used': False, 'expires_at': expires_at}
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM active_card_drops WHERE expires_at < $1",
+                time.time() - 86400
+            )
+            await conn.execute(
+                """INSERT INTO active_card_drops
+                   (chat_id, message_id, card_id, card_name, card_type, file_id,
+                    rarity, collection, expires_at, winner_id, winner_name, ended)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL, FALSE)
+                   ON CONFLICT (chat_id, message_id) DO UPDATE SET
+                     card_id = EXCLUDED.card_id, card_name = EXCLUDED.card_name,
+                     card_type = EXCLUDED.card_type, file_id = EXCLUDED.file_id,
+                     rarity = EXCLUDED.rarity, collection = EXCLUDED.collection,
+                     expires_at = EXCLUDED.expires_at, winner_id = NULL,
+                     winner_name = NULL, ended = FALSE""",
+                chat_id, msg.message_id, str(card.get('card_id') or ''),
+                str(card.get('name') or ''), card.get('type'), card.get('file_id'),
+                card.get('rarity'), card.get('collection'), expires_at
+            )
+    except Exception as e:
+        print(f"Could not persist active character spawn: {e}")
     try:
         await context.bot.edit_message_reply_markup(
             chat_id=chat_id,
@@ -1417,73 +1458,125 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await _safe_reply_text(msg, "Use: /mm character name")
     requested = normalize_character_answer(" ".join(context.args))
+    if not requested:
+        return await _safe_reply_text(msg, "Use: /mm character name")
 
-    # If /mm is sent as a reply to a spawned card, always check that exact card.
-    # Otherwise use the user's .k-selected card before falling back to the latest spawn.
-    replied_drop_id = (msg.reply_to_message.message_id
-                       if msg.reply_to_message and msg.reply_to_message.message_id in active_card_drops
-                       else None)
-    pending_drop_id = pending_catch_targets.get((chat.id, user.id))
-    pending_drop = active_card_drops.get(pending_drop_id) if pending_drop_id else None
-    if replied_drop_id is not None:
-        found = (replied_drop_id, active_card_drops.get(replied_drop_id))
-    elif pending_drop and pending_drop.get('chat_id') == chat.id:
-        found = (pending_drop_id, pending_drop)
-    else:
-        found = next(((mid, d) for mid, d in reversed(list(active_card_drops.items()))
-                      if d.get('chat_id') == chat.id and not d.get('ended') and time.time() < d.get('expires_at', 0)), None)
-    if not found or not found[1]:
-        return await _safe_reply_text(msg, "❄ No active character spawn right now.")
-    drop_id, drop = found
-    lock = card_drop_locks.setdefault(drop_id, asyncio.Lock())
-    async with lock:
-        if drop['winner_id'] is not None:
-            winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
-            return await _safe_reply_text(msg, 
-                f"Too Late 😭 {winner} got it first. Try next time ❄",
-                parse_mode='HTML'
-            )
-        if drop['ended'] or time.time() >= drop['expires_at']:
-            return
-        card = drop['card']
-        expected_name = normalize_character_answer(card.get('name', ''))
-        # Accept the complete name, or the first name only (e.g. "Hinata" for
-        # "Hinata Hyuuga"), while still ignoring case/punctuation/spacing differences.
-        first_name = expected_name.split()[0] if expected_name else ""
-        is_correct = bool(requested) and (
-            requested == expected_name or
-            (" " not in requested and requested == first_name)
-        )
-        if not is_correct:
-            return await _safe_reply_text(msg, "❌ Wrong character name. Try again!")
-        try:
-            async with db_pool.acquire() as conn:
-                async with conn.transaction():
-                    claim_date = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6, minutes=30)).date()
-                    daily_claim = await conn.fetchrow(
-                        """INSERT INTO daily_spawn_claims (user_id, claim_date, count) VALUES ($1, $2, 1)
-                           ON CONFLICT (user_id, claim_date) DO UPDATE SET count = daily_spawn_claims.count + 1
-                           WHERE daily_spawn_claims.count < 35 RETURNING count""",
-                        user.id, claim_date
+    replied_id = (
+        msg.reply_to_message.message_id
+        if msg.reply_to_message and msg.reply_to_message.message_id else None
+    )
+    now = time.time()
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                if replied_id is not None:
+                    drop = await conn.fetchrow(
+                        "SELECT * FROM active_card_drops WHERE chat_id=$1 AND message_id=$2 FOR UPDATE",
+                        chat.id, replied_id
                     )
-                    if not daily_claim:
-                        return await _safe_reply_text(msg, "⛔ You have reached today's 35 character catch limit. Please wait until tomorrow.")
-                    await conn.execute(
-                        """INSERT INTO user_cards (user_id, card_id, amount)
-                           VALUES ($1, $2, 1)
-                           ON CONFLICT (user_id, card_id)
-                           DO UPDATE SET amount = user_cards.amount + 1""",
-                        user.id, card['card_id']
-                    )
-                    await check_and_auto_lock_card(conn, card['card_id'])
-        except Exception as e:
-            print(f"Error awarding spawned card: {e}")
-            return await _safe_reply_text(msg, "❌ Could not award this card. Please try again.")
-        drop['winner_id'], drop['winner_name'], drop['ended'] = user.id, user.first_name, True
+                else:
+                    pending_id = pending_catch_targets.get((chat.id, user.id))
+                    drop = None
+                    if pending_id is not None:
+                        drop = await conn.fetchrow(
+                            """SELECT * FROM active_card_drops
+                               WHERE chat_id=$1 AND message_id=$2 AND ended=FALSE
+                                 AND winner_id IS NULL AND expires_at>$3
+                               FOR UPDATE""",
+                            chat.id, pending_id, now
+                        )
+                    if not drop:
+                        rows = await conn.fetch(
+                            """SELECT * FROM active_card_drops
+                               WHERE chat_id=$1 AND ended=FALSE AND winner_id IS NULL AND expires_at>$2
+                               ORDER BY message_id DESC FOR UPDATE""",
+                            chat.id, now
+                        )
+                        # Match the typed name against every live spawn before falling back to newest.
+                        drop = next(
+                            (r for r in rows if normalize_character_answer(r['card_name']) == requested),
+                            rows[0] if rows else None
+                        )
+
+                # Backward-compatible local fallback for a spawn created during DB downtime.
+                if not drop and replied_id is None:
+                    local_items = [
+                        (mid, d) for mid, d in active_card_drops.items()
+                        if d.get('chat_id') == chat.id and not d.get('ended')
+                        and d.get('winner_id') is None and d.get('expires_at', 0) > now
+                    ]
+                    if local_items:
+                        mid, local = next(
+                            ((mid, d) for mid, d in reversed(local_items)
+                             if normalize_character_answer(d['card'].get('name', '')) == requested),
+                            local_items[-1]
+                        )
+                        c = local['card']
+                        drop = {
+                            'chat_id': chat.id, 'message_id': mid,
+                            'card_id': str(c.get('card_id') or ''), 'card_name': c.get('name') or '',
+                            'card_type': c.get('type'), 'file_id': c.get('file_id'),
+                            'rarity': c.get('rarity'), 'collection': c.get('collection'),
+                            'expires_at': local.get('expires_at', 0), 'winner_id': local.get('winner_id'),
+                            'winner_name': local.get('winner_name'), 'ended': local.get('ended', False)
+                        }
+
+                if not drop and replied_id is not None:
+                    local = active_card_drops.get(replied_id)
+                    if local and local.get('chat_id') == chat.id:
+                        c = local['card']
+                        drop = {
+                            'chat_id': chat.id, 'message_id': replied_id,
+                            'card_id': str(c.get('card_id') or ''), 'card_name': c.get('name') or '',
+                            'card_type': c.get('type'), 'file_id': c.get('file_id'),
+                            'rarity': c.get('rarity'), 'collection': c.get('collection'),
+                            'expires_at': local.get('expires_at', 0), 'winner_id': local.get('winner_id'),
+                            'winner_name': local.get('winner_name'), 'ended': local.get('ended', False)
+                        }
+                if not drop:
+                    return await _safe_reply_text(msg, "❄ No active character spawn right now.")
+                if drop['winner_id'] is not None:
+                    winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
+                    return await _safe_reply_text(msg, f"Too Late 😭 {winner} got it first. Try next time ❄", parse_mode='HTML')
+                if drop['ended'] or float(drop['expires_at']) <= now:
+                    return
+
+                expected = normalize_character_answer(drop['card_name'])
+                first_name = expected.split()[0] if expected else ''
+                if not (requested == expected or (' ' not in requested and requested == first_name)):
+                    return await _safe_reply_text(msg, "❌ Wrong character name. Try again!")
+
+                claim_date = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6, minutes=30)).date()
+                daily_claim = await conn.fetchrow(
+                    """INSERT INTO daily_spawn_claims (user_id, claim_date, count) VALUES ($1, $2, 1)
+                       ON CONFLICT (user_id, claim_date)
+                       DO UPDATE SET count = daily_spawn_claims.count + 1
+                       WHERE daily_spawn_claims.count < 35 RETURNING count""",
+                    user.id, claim_date
+                )
+                if not daily_claim:
+                    return await _safe_reply_text(msg, "⛔ You have reached today's 35 character catch limit. Please wait until tomorrow.")
+                await conn.execute(
+                    """INSERT INTO user_cards (user_id, card_id, amount) VALUES ($1, $2, 1)
+                       ON CONFLICT (user_id, card_id)
+                       DO UPDATE SET amount = user_cards.amount + 1""",
+                    user.id, drop['card_id']
+                )
+                await check_and_auto_lock_card(conn, drop['card_id'])
+                await conn.execute(
+                    """UPDATE active_card_drops SET winner_id=$1, winner_name=$2, ended=TRUE
+                       WHERE chat_id=$3 AND message_id=$4""",
+                    user.id, user.first_name, chat.id, drop['message_id']
+                )
+        drop_id = drop['message_id']
+        local_drop = active_card_drops.get(drop_id)
+        if local_drop:
+            local_drop.update({'winner_id': user.id, 'winner_name': user.first_name, 'ended': True})
         pending_catch_targets.pop((chat.id, user.id), None)
+    except Exception as e:
+        print(f"Error awarding spawned card: {e}")
+        return await _safe_reply_text(msg, "❌ Could not award this card. Please try again.")
 
-
-    # Winner animation: show 🪄 then ⭐ for 1.5 seconds each before the card result.
     animation_msg = None
     try:
         animation_msg = await context.bot.send_message(chat.id, '🪄')
@@ -1499,6 +1592,10 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+    card = {
+        'card_id': drop['card_id'], 'name': drop['card_name'], 'type': drop['card_type'],
+        'file_id': drop['file_id'], 'rarity': drop['rarity'], 'collection': drop['collection']
+    }
     rarity = get_rarity_display(card.get('rarity', 'Ten'))
     collection = card.get('collection') or '🎞 Ope Ope No Mi [ 🩺]'
     caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
@@ -1512,6 +1609,7 @@ async def mm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_video(chat.id, card['file_id'], caption=caption, parse_mode='HTML', reply_markup=keyboard)
     except Exception as e:
         print(f"Could not send claimed card: {e}")
+        await _safe_reply_text(msg, caption, parse_mode='HTML', reply_markup=keyboard)
 
 
 @restricted_command
@@ -1539,23 +1637,33 @@ async def run_character_drop_timer(context: ContextTypes.DEFAULT_TYPE, msg_id: i
     if not drop:
         return
     await asyncio.sleep(max(0, drop['expires_at'] - time.time()))
-    drop = active_card_drops.get(msg_id)
-    if not drop:
-        return
-    # Synchronize timer finalization with /mm so expiry is announced only once.
-    lock = card_drop_locks.setdefault(msg_id, asyncio.Lock())
-    async with lock:
-        drop = active_card_drops.get(msg_id)
-        if not drop:
-            return
-        if time.time() >= drop['expires_at'] and drop['winner_id'] is None and not drop['ended']:
-            drop['ended'] = True
-            try:
-                await context.bot.send_message(drop['chat_id'], '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။')
-            except Exception as e:
-                print(f"Could not post expired notice: {e}")
-        active_card_drops.pop(msg_id, None)
-        card_drop_locks.pop(msg_id, None)
+    chat_id = drop['chat_id']
+    expired = False
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """UPDATE active_card_drops SET ended = TRUE
+                   WHERE chat_id = $1 AND message_id = $2
+                     AND ended = FALSE AND winner_id IS NULL AND expires_at <= $3
+                   RETURNING chat_id""",
+                chat_id, msg_id, time.time()
+            )
+            expired = row is not None
+    except Exception as e:
+        print(f"Could not finalize character spawn expiry in database: {e}")
+        lock = card_drop_locks.setdefault(msg_id, asyncio.Lock())
+        async with lock:
+            current = active_card_drops.get(msg_id)
+            if current and current.get('winner_id') is None and not current.get('ended') and time.time() >= current['expires_at']:
+                current['ended'] = True
+                expired = True
+    if expired:
+        try:
+            await context.bot.send_message(chat_id, '⏰ အချိန်ပြည့်သွားပါပြီ။ ကဒ်ကို Lock ချလိုက်ပါပြီ။ နောက်ကဒ်ကျမှ ကောက်နိုင်ပါမယ်။')
+        except Exception as e:
+            print(f"Could not post expired notice: {e}")
+    active_card_drops.pop(msg_id, None)
+    card_drop_locks.pop(msg_id, None)
 
 
 @restricted_command
@@ -4604,19 +4712,31 @@ Collection : {col_name}
 🔍 Check: /kc
 📖 Details: /card {card['card_id']}"""
 
-        try:
-            asyncio.create_task(query.message.delete())
-        except Exception:
-            pass
-
+        # Kbox rewards must always be displayed with their original photo/video media.
+        # Never replace a failed media delivery with a text-only card result.
         try:
             if card['type'] == 'photo':
-                asyncio.create_task(bot.send_photo(chat_id=chat_id, photo=card['file_id'], caption=result_caption, parse_mode="HTML"))
+                await bot.send_photo(
+                    chat_id=chat_id, photo=card['file_id'],
+                    caption=result_caption, parse_mode="HTML"
+                )
             else:
-                asyncio.create_task(bot.send_video(chat_id=chat_id, video=card['file_id'], caption=result_caption, parse_mode="HTML"))
-        except Exception:
+                await bot.send_video(
+                    chat_id=chat_id, video=card['file_id'],
+                    caption=result_caption, parse_mode="HTML"
+                )
+        except Exception as send_error:
+            print(f"Could not send Kbox card media: {send_error}")
             try:
-                asyncio.create_task(bot.send_message(chat_id=chat_id, text=result_caption, parse_mode="HTML"))
+                await query.edit_message_text(
+                    "❌ Your Kbox card was added, but its photo/video could not be displayed. Please contact an admin.",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                await query.message.delete()
             except Exception:
                 pass
     except Exception as e:
