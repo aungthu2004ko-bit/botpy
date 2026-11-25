@@ -189,6 +189,7 @@ pending_card_adds = {}
 pending_cc_channel_adds = {}
 pending_kachi_transfers = {}
 pending_card_buys = {}
+pending_group_sends = {}
 active_kbox_users = set()  # Track ongoing Kbox sessions per user
 kshop_prices = {}  # Track shop card prices per user session
 active_kdic_games = {}  # (chat_id, user_id) -> private dice-game state
@@ -885,52 +886,29 @@ async def get_weighted_random_card(conn):
     return random.choices(all_cards, weights=weights, k=1)[0]
 
 async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Require users to start the bot in private chat; admin is exempt."""
     user = update.effective_user
-    if not user or user.is_bot:
+    if not user or user.is_bot or user.id == ADMIN_ID:
         return True
-    if user.id == ADMIN_ID:
+    chat = update.effective_chat
+    if chat and chat.type == "private":
         return True
-
-    required_chats = (
-        ("@beyondpoe", "Join Channel 📢", "https://t.me/beyondpoe"),
-        ("@Kachi_sGroup", "Join အထန် 🔞 Gp", MAIN_GROUP_LINK),
-    )
-    missing = []
-    try:
-        for chat_id, button_text, join_url in required_chats:
-            member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
-            if member.status in ("left", "kicked"):
-                missing.append((button_text, join_url))
-    except TelegramError as e:
-        # Preserve the existing fail-open behavior during temporary Telegram/API errors.
-        print(f"Force-join check temporarily unavailable for user {user.id}: {type(e).__name__}: {e}")
+    async with db_pool.acquire() as conn:
+        started = await conn.fetchval(
+            "SELECT COALESCE(started_in_pm, FALSE) FROM users WHERE user_id = $1",
+            user.id
+        )
+    if started:
         return True
-    except Exception as e:
-        print(f"Unexpected force-join check error for user {user.id}: {type(e).__name__}: {e}")
-        return True
-
-    if not missing:
-        return True
-
-    keyboard_rows = [[InlineKeyboardButton(label, url=url, style="primary")] for label, url in missing]
-    keyboard_rows.append([InlineKeyboardButton("Joined ✅", callback_data=f"check_join_{user.id}", style="success")])
-    text = (
-        f"🐠 Hello {get_mention(user.id, user.first_name)}, "
-        "please join our channel and main group to use the bot 🩸"
-    )
-    keyboard = InlineKeyboardMarkup(keyboard_rows)
-    if update.message:
-        try:
-            await _safe_reply_text(update.effective_message, 
-                text, parse_mode="HTML", reply_markup=keyboard
-            )
-        except Exception as e:
-            print(f"Could not send force-join notice to user {user.id}: {type(e).__name__}: {e}")
+    bot_info = await context.bot.get_me()
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Bot DM Start", url=f"https://t.me/{bot_info.username}?start=verify", style="success")
+    ]])
+    text = "💛Hello Bot dm မှာ start နှိပ်ပေးခြင်းဖြင့်ကူညီပြီး bot သုံးလို့ရပါတယ် 🖤"
+    if update.effective_message:
+        await _safe_reply_text(update.effective_message, text, reply_markup=keyboard)
     elif update.callback_query:
-        try:
-            await update.callback_query.answer("❌ Please join the required channel and group first.", show_alert=True)
-        except Exception as e:
-            print(f"Could not answer force-join callback for user {user.id}: {type(e).__name__}: {e}")
+        await update.callback_query.answer("Bot DM မှာ Start နှိပ်ပေးပါ။", show_alert=True)
     return False
 
 async def check_main_group_restriction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1079,9 +1057,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     msg_id = update.message.message_id
     await register_user_group(user, chat, context)
-
-    if not await check_force_join(update, context):
-        return
+    if chat and chat.type == "private":
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET started_in_pm = TRUE WHERE user_id = $1",
+                user.id
+            )
 
     if context.args:
         arg_val = context.args[0]
@@ -1172,6 +1153,10 @@ English
         ],
         [
             InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{bot_info.username}?startgroup=true", style="success")
+        ],
+        [
+            InlineKeyboardButton("Main Group 🏰", url=MAIN_GROUP_LINK, style="primary"),
+            InlineKeyboardButton("Main Channel 📢", url="https://t.me/beyondpoe", style="primary")
         ]
     ])
 
@@ -1500,6 +1485,8 @@ def normalize_character_answer(value: str) -> str:
 @restricted_command
 async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not await check_force_join(update, context):
+        return
     if not context.args:
         return await _safe_reply_text(msg, "Use: /mm character name")
     requested = normalize_character_answer(" ".join(context.args))
@@ -3662,6 +3649,11 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
             """, target_id)
 
     total_owned_sum = sum(c['amount'] for c in user_card_rows)
+    async with db_pool.acquire() as conn:
+        all_owned_total = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM user_cards WHERE user_id = $1",
+            target_id
+        )
 
     per_page = 8
     total_cards = len(user_card_rows)
@@ -3672,7 +3664,8 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     text_header = f"""❀ NAME - {get_mention(target_id, display_name)}
 ❀ Global No - #{global_rank}
 
-HAREM PAGE{mode_title} ({page + 1}/{total_pages})"""
+HAREM PAGE{mode_title} ({page + 1}/{total_pages})
+🎴 Total Cards: {all_owned_total}"""
 
     if not user_card_rows:
         full_text = f"{text_header}\n\nCollection\n<i>No cards found.</i>"
@@ -4171,6 +4164,105 @@ async def cardlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await render_cardlist_page(update, context, page=0, owner_id=update.effective_user.id)
 
+async def render_see_rarity_menu(target, context, owner_id):
+    rarities = await _fetch_distinct_rarities()
+    if not rarities:
+        return await target.edit_message_text("No rarities found.")
+    rows = []
+    row = []
+    for rarity in rarities:
+        row.append(InlineKeyboardButton(
+            f"{get_rarity_display(rarity)}",
+            callback_data=f"see_rarity_{owner_id}_{rarity}"
+        ))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    menu_text = "🎴 Select a rarity to view all cards:"
+    markup = InlineKeyboardMarkup(rows)
+    if isinstance(target, Message):
+        await _safe_reply_text(target, menu_text, reply_markup=markup)
+    else:
+        await target.edit_message_text(menu_text, reply_markup=markup)
+
+
+async def _fetch_distinct_rarities():
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT DISTINCT rarity FROM cards WHERE rarity IS NOT NULL ORDER BY rarity"
+        )
+    return [r["rarity"] for r in rows]
+
+
+async def render_see_rarity_page(query, context, owner_id, rarity, page):
+    async with db_pool.acquire() as conn:
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM cards WHERE rarity = $1", rarity
+        )
+        cards = await conn.fetch(
+            """SELECT card_id, name, rarity FROM cards
+               WHERE rarity = $1 ORDER BY card_id ASC
+               LIMIT 20 OFFSET $2""",
+            rarity, page * 20
+        )
+    total = int(total or 0)
+    pages = max(1, (total + 19) // 20)
+    lines = [f"🎴 {get_rarity_display(rarity)}", f"Total: {total} cards", f"Page {page + 1}/{pages}", ""]
+    lines.extend(
+        f"{page * 20 + i}. {c['name']} — <code>{c['card_id']}</code>"
+        for i, c in enumerate(cards, 1)
+    )
+    buttons = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ Back", callback_data=f"see_page_{owner_id}_{page-1}_{rarity}"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"see_page_{owner_id}_{page+1}_{rarity}"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton("↩️ Back Menu", callback_data=f"see_menu_{owner_id}")])
+    await query.edit_message_text(
+        "\\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+@restricted_command
+async def see_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await render_see_rarity_menu(
+        update.effective_message, context, update.effective_user.id
+    )
+
+
+@restricted_command
+async def send_group_prompt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        return await _safe_reply_text(update.effective_message, "အသုံးပြုပုံ: /send gplink")
+    raw = " ".join(context.args).strip()
+    link = raw if raw.startswith(("https://t.me/", "http://t.me/")) else "https://t.me/" + raw.lstrip("@/")
+    internal_match = re.search(r"t\.me/c/(\d+)", link)
+    public_match = re.search(r"(?:t\.me/)([A-Za-z0-9_]+)", link)
+    if internal_match:
+        chat_ref = int("-100" + internal_match.group(1))
+    elif public_match:
+        chat_ref = "@" + public_match.group(1)
+    elif re.fullmatch(r"-?\d+", raw):
+        chat_ref = int(raw)
+    else:
+        return await _safe_reply_text(
+            update.effective_message,
+            "❌ Public group link, t.me/c group link သို့မဟုတ် chat ID ပေးပါ။ Private invite link တစ်ခုတည်းနဲ့ Bot API က group ကိုရှာမရပါ။"
+        )
+    pending_group_sends[update.effective_user.id] = {"link": link, "chat_ref": chat_ref}
+    await _safe_reply_text(update.effective_message, "ပို့မယ့်စာသားကို ရိုက်ပေးပါ။")
+
+
 @restricted_command
 async def seelock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -4542,6 +4634,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not chat or not msg or not user or user.is_bot:
         return
+
+    if user.id == ADMIN_ID and user.id in pending_group_sends and msg.text and not msg.text.startswith("/"):
+        pending = pending_group_sends.pop(user.id)
+        target_ref = pending["chat_ref"]
+        try:
+            target_chat = await context.bot.get_chat(target_ref)
+            await context.bot.send_message(
+                chat_id=target_chat.id,
+                text=f"🦋 Message \\n\\n{msg.text}"
+            )
+            return await _safe_reply_text(msg, "✅ Message sent to the group.")
+        except Exception as e:
+            print(f"/send group delivery failed: {type(e).__name__}: {e}")
+            return await _safe_reply_text(msg, "❌ ပို့လို့မရပါ။ Bot ကို group ထဲထည့်ထားပြီး permission ရှိမရှိစစ်ပါ။")
 
     asyncio.create_task(register_user_group(user, chat, context))
 
@@ -5681,6 +5787,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("✅ Rarity mode updated successfully!")
         return
 
+    if data.startswith("see_menu_"):
+        owner_id = int(data.split("_")[2])
+        if user.id != owner_id or user.id != ADMIN_ID:
+            return await query.answer("❌ Admin only.", show_alert=True)
+        await render_see_rarity_menu(query, context, owner_id)
+        return await query.answer()
+
+    if data.startswith("see_rarity_"):
+        parts = data.split("_", 3)
+        owner_id = int(parts[2])
+        rarity = parts[3]
+        if user.id != owner_id or user.id != ADMIN_ID:
+            return await query.answer("❌ Admin only.", show_alert=True)
+        await render_see_rarity_page(query, context, owner_id, rarity, 0)
+        return await query.answer()
+
+    if data.startswith("see_page_"):
+        parts = data.split("_", 4)
+        owner_id = int(parts[2])
+        page = int(parts[3])
+        rarity = parts[4]
+        if user.id != owner_id or user.id != ADMIN_ID:
+            return await query.answer("❌ Admin only.", show_alert=True)
+        await render_see_rarity_page(query, context, owner_id, rarity, page)
+        return await query.answer()
+
     if data.startswith("kshop_rarity_"):
         parts = data.split("_")
         allowed_uid = int(parts[2])
@@ -6051,27 +6183,7 @@ Reply to a user's message and use:
         return
 
     if data.startswith("check_join_"):
-        target_uid = int(data.split("_")[2])
-        if user.id != target_uid:
-            return await query.answer("❌ Not for you.", show_alert=True)
-        try:
-            required_chats = ("@beyondpoe", "@Kachi_sGroup")
-            missing = []
-            for required_chat in required_chats:
-                member = await context.bot.get_chat_member(chat_id=required_chat, user_id=user.id)
-                if member.status in ("left", "kicked"):
-                    missing.append(required_chat)
-            if missing:
-                return await query.answer("❌ Please join both the channel and main group first.", show_alert=True)
-            await query.answer("✅ Thank you! You can now use commands.", show_alert=True)
-            try:
-                await query.message.edit_text("✅ Verified! You can now use the bot.", parse_mode="HTML")
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"Force-join callback verification failed for {user.id}: {type(e).__name__}: {e}")
-            await query.answer("⚠️ Could not verify membership. Please try again.", show_alert=True)
-        return
+        return await query.answer("ဒီစနစ်ကို ပြောင်းလဲထားပါတယ်။ Bot DM မှာ Start နှိပ်ပေးပါ။", show_alert=True)
 
     if data == "join_card_drop":
         return await query.answer("Use /mm character name to catch this card.", show_alert=True)
@@ -6313,6 +6425,8 @@ def main():
     app.add_handler(CommandHandler("kclist", kclist_cmd))
     app.add_handler(CommandHandler("cardlist", cardlist_cmd))
     app.add_handler(CommandHandler("seelock", seelock_cmd))
+    app.add_handler(CommandHandler("see", see_cmd))
+    app.add_handler(CommandHandler("send", send_group_prompt_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("kcreset", kcreset_cmd))
     app.add_handler(CommandHandler("glist", glist_cmd))
