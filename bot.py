@@ -350,6 +350,19 @@ async def _init_db_once():
                 count INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, claim_date)
             );
+            CREATE TABLE IF NOT EXISTS send_message_likes (
+                message_key TEXT PRIMARY KEY,
+                total_likes BIGINT NOT NULL DEFAULT 0,
+                chat_id BIGINT,
+                message_id BIGINT
+            );
+            ALTER TABLE send_message_likes ADD COLUMN IF NOT EXISTS chat_id BIGINT;
+            ALTER TABLE send_message_likes ADD COLUMN IF NOT EXISTS message_id BIGINT;
+            CREATE TABLE IF NOT EXISTS send_message_like_users (
+                message_key TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                PRIMARY KEY (message_key, user_id)
+            );
             CREATE TABLE IF NOT EXISTS active_card_drops (
                 chat_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL,
@@ -2347,56 +2360,34 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "\n".join(lines)
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML")
 
-@restricted_command
-async def tdc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Daily Catcher Top 15: count successful automatic drops only.
-
-    daily_spawn_claims is incremented only in mm_cmd when a spawned drop is
-    successfully claimed. /pre and /kbox do not write to this table.
-    """
-    if not await check_force_join(update, context):
-        return
-
-    # Match the bot's existing daily catch-limit timezone (Myanmar UTC+06:30).
-    claim_date = (datetime.datetime.now(datetime.timezone.utc)
-                  + datetime.timedelta(hours=6, minutes=30)).date()
-
+async def render_tdc_page(bot, chat_id, claim_date, page):
     async with db_pool.acquire() as conn:
-        top_users = await conn.fetch("""
+        rows = await conn.fetch("""
             SELECT u.user_id, COALESCE(u.name, 'Catcher') AS name,
                    SUM(d.count)::BIGINT AS total_catches
-            FROM daily_spawn_claims d
-            JOIN users u ON u.user_id = d.user_id
+            FROM daily_spawn_claims d JOIN users u ON u.user_id = d.user_id
             WHERE d.claim_date = $1 AND d.count > 0
             GROUP BY u.user_id, u.name
             ORDER BY total_catches DESC, u.user_id ASC
-            LIMIT 15
         """, claim_date)
+    page_size=15; pages=max(1,(len(rows)+page_size-1)//page_size); page=max(0,min(page,pages-1))
+    lines=["🏆 DAILY CATCHER",f"📅 {claim_date.strftime('%d %b %Y')}","","Successful Drop Catchers","▰▱▰▱▰▱▰▱▰▱▰"]
+    medals=["🥇","🥈","🥉"]
+    chunk=rows[page*page_size:(page+1)*page_size]
+    for i,row in enumerate(chunk):
+        rank=page*page_size+i; prefix=medals[rank] if rank<3 else "☞"
+        lines.append(f"{prefix} {get_mention(row['user_id'],row['name'])} — {row['total_catches']} catches")
+    lines.extend(["▰▱▰▱▰▱▰▱▰▱▰",f"Page {page+1}/{pages}","Only successful automatic card drops are counted. /pre and /kbox are excluded."])
+    nav=[]
+    if page>0: nav.append(InlineKeyboardButton("◀️ Back",callback_data=f"tdcpage_{claim_date.isoformat()}_{page-1}"))
+    if page+1<pages: nav.append(InlineKeyboardButton("Next ▶️",callback_data=f"tdcpage_{claim_date.isoformat()}_{page+1}"))
+    return await bot.send_message(chat_id,"\n".join(lines),parse_mode="HTML",reply_markup=InlineKeyboardMarkup([nav]) if nav else None)
 
-    lines = [
-        "🏆 DAILY CATCHER TOP 15",
-        f"📅 {claim_date.strftime('%d %b %Y')}",
-        "",
-        "Successful Drop Catchers",
-        "▰▱▰▱▰▱▰▱▰▱▰",
-    ]
-    medals = ["🥇", "🥈", "🥉"]
-    for i in range(15):
-        prefix = medals[i] if i < 3 else "☞"
-        if i < len(top_users):
-            row = top_users[i]
-            mention = get_mention(row['user_id'], row['name'])
-            lines.append(f"{prefix} {mention} — {row['total_catches']} catches")
-        else:
-            lines.append(f"{prefix} —")
-    lines.append("▰▱▰▱▰▱▰▱▰▱▰")
-    lines.append("\nOnly successful automatic card drops are counted. /pre and /kbox are excluded.")
-
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="\n".join(lines),
-        parse_mode="HTML"
-    )
+@restricted_command
+async def tdc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_force_join(update, context): return
+    claim_date=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=6, minutes=30)).date()
+    return await render_tdc_page(context.bot,update.effective_chat.id,claim_date,0)
 
 
 @restricted_command
@@ -4240,27 +4231,19 @@ async def see_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted_command
 async def send_group_prompt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    if not context.args:
-        return await _safe_reply_text(update.effective_message, "အသုံးပြုပုံ: /send gplink")
-    raw = " ".join(context.args).strip()
-    link = raw if raw.startswith(("https://t.me/", "http://t.me/")) else "https://t.me/" + raw.lstrip("@/")
-    internal_match = re.search(r"t\.me/c/(\d+)", link)
-    public_match = re.search(r"(?:t\.me/)([A-Za-z0-9_]+)", link)
-    if internal_match:
-        chat_ref = int("-100" + internal_match.group(1))
-    elif public_match:
-        chat_ref = "@" + public_match.group(1)
-    elif re.fullmatch(r"-?\d+", raw):
-        chat_ref = int(raw)
-    else:
-        return await _safe_reply_text(
-            update.effective_message,
-            "❌ Public group link, t.me/c group link သို့မဟုတ် chat ID ပေးပါ။ Private invite link တစ်ခုတည်းနဲ့ Bot API က group ကိုရှာမရပါ။"
-        )
-    pending_group_sends[update.effective_user.id] = {"link": link, "chat_ref": chat_ref}
-    await _safe_reply_text(update.effective_message, "ပို့မယ့်စာသားကို ရိုက်ပေးပါ။")
+    if update.effective_user.id != ADMIN_ID: return
+    if not context.args: return await _safe_reply_text(update.effective_message,"Usage: /send gplink [gplink ...]")
+    refs=[]
+    for raw in context.args:
+        link=raw if raw.startswith(("https://t.me/","http://t.me/")) else "https://t.me/"+raw.lstrip("@/")
+        im=re.search(r"t\.me/c/(\d+)",link); pm=re.search(r"(?:t\.me/)([A-Za-z0-9_]+)",link)
+        if im: ref=int("-100"+im.group(1))
+        elif pm: ref="@"+pm.group(1)
+        elif re.fullmatch(r"-?\d+",raw): ref=int(raw)
+        else: return await _safe_reply_text(update.effective_message,"❌ Invalid group link or chat ID: "+raw)
+        refs.append(ref)
+    pending_group_sends[update.effective_user.id]={"targets":refs}
+    await _safe_reply_text(update.effective_message,"Send the message text to broadcast to these groups.")
 
 
 @restricted_command
@@ -4636,18 +4619,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user.id == ADMIN_ID and user.id in pending_group_sends and msg.text and not msg.text.startswith("/"):
-        pending = pending_group_sends.pop(user.id)
-        target_ref = pending["chat_ref"]
-        try:
-            target_chat = await context.bot.get_chat(target_ref)
-            await context.bot.send_message(
-                chat_id=target_chat.id,
-                text=f"🦋 Message \n\n{msg.text}"
-            )
-            return await _safe_reply_text(msg, "✅ Message sent to the group.")
-        except Exception as e:
-            print(f"/send group delivery failed: {type(e).__name__}: {e}")
-            return await _safe_reply_text(msg, "❌ ပို့လို့မရပါ။ Bot ကို group ထဲထည့်ထားပြီး permission ရှိမရှိစစ်ပါ။")
+        pending=pending_group_sends.pop(user.id); targets=pending["targets"]
+        successes=0; failures=0
+        async with db_pool.acquire() as conn:
+            total=await conn.fetchval("SELECT COUNT(*) FROM send_message_like_users")
+        for target_ref in targets:
+            try:
+                chat=await context.bot.get_chat(target_ref)
+                key=f"{uuid.uuid4()}"
+                keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(f"Like ❤️ {int(total or 0)}",callback_data=f"sendlike_{key}",style="primary")]])
+                sent_message=await context.bot.send_message(chat_id=chat.id,text=f"🦋 Message \n\n{msg.text}",reply_markup=keyboard)
+                async with db_pool.acquire() as conn:
+                    await conn.execute("INSERT INTO send_message_likes(message_key,total_likes,chat_id,message_id) VALUES($1,0,$2,$3)",key,chat.id,sent_message.message_id)
+                successes+=1
+            except Exception as e:
+                failures+=1; print(f"/send delivery failed: {type(e).__name__}: {e}")
+        return await _safe_reply_text(msg,f"✅ Sent: {successes} | Failed: {failures}")
+
 
     asyncio.create_task(register_user_group(user, chat, context))
 
@@ -5334,6 +5322,42 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if query and query.data and query.data.startswith("sendlike_"):
+        key=query.data[len("sendlike_"):]; uid=query.from_user.id
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                exists=await conn.fetchval("SELECT 1 FROM send_message_like_users WHERE message_key=$1 AND user_id=$2",key,uid)
+                if exists: return await query.answer("You already liked this message.")
+                await conn.execute("INSERT INTO send_message_like_users(message_key,user_id) VALUES($1,$2)",key,uid)
+                await conn.execute("UPDATE send_message_likes SET total_likes=total_likes+1 WHERE message_key=$1",key)
+                total=await conn.fetchval("SELECT COUNT(*) FROM send_message_like_users")
+                sent_messages=await conn.fetch("SELECT message_key,chat_id,message_id FROM send_message_likes WHERE chat_id IS NOT NULL AND message_id IS NOT NULL")
+        # Show the same all-time total on every /send message, including messages in other groups.
+        for sent_row in sent_messages:
+            try:
+                markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"Like ❤️ {int(total or 0)}",callback_data=f"sendlike_{sent_row['message_key']}",style="primary")]])
+                await context.bot.edit_message_reply_markup(chat_id=sent_row['chat_id'],message_id=sent_row['message_id'],reply_markup=markup)
+            except Exception:
+                pass
+        return await query.answer("Liked ❤️")
+    if query and query.data and query.data.startswith("tdcpage_"):
+        parts=query.data[len("tdcpage_"):].split("_"); date=datetime.date.fromisoformat(parts[0]); page=int(parts[1])
+        await query.answer()
+        # Update the existing page in place.
+        async with db_pool.acquire() as conn:
+            rows=await conn.fetch("""SELECT u.user_id,COALESCE(u.name,'Catcher') AS name,SUM(d.count)::BIGINT AS total_catches
+                FROM daily_spawn_claims d JOIN users u ON u.user_id=d.user_id WHERE d.claim_date=$1 AND d.count>0
+                GROUP BY u.user_id,u.name ORDER BY total_catches DESC,u.user_id ASC""",date)
+        page_size=15; pages=max(1,(len(rows)+page_size-1)//page_size); page=max(0,min(page,pages-1)); chunk=rows[page*page_size:(page+1)*page_size]
+        lines=["🏆 DAILY CATCHER",f"📅 {date.strftime('%d %b %Y')}","","Successful Drop Catchers","▰▱▰▱▰▱▰▱▰▱▰"]
+        medals=["🥇","🥈","🥉"]
+        for i,row in enumerate(chunk):
+            rank=page*15+i; prefix=medals[rank] if rank<3 else "☞"; lines.append(f"{prefix} {get_mention(row['user_id'],row['name'])} — {row['total_catches']} catches")
+        lines.extend(["▰▱▰▱▰▱▰▱▰▱▰",f"Page {page+1}/{pages}","Only successful automatic card drops are counted. /pre and /kbox are excluded."])
+        nav=[]
+        if page>0: nav.append(InlineKeyboardButton("◀️ Back",callback_data=f"tdcpage_{date.isoformat()}_{page-1}"))
+        if page+1<pages: nav.append(InlineKeyboardButton("Next ▶️",callback_data=f"tdcpage_{date.isoformat()}_{page+1}"))
+        return await query.edit_message_text("\n".join(lines),parse_mode="HTML",reply_markup=InlineKeyboardMarkup([nav]) if nav else None)
     if query and query.data and query.data.startswith("highquiz_"):
         quiz = active_high_rarity_quizzes.get(query.message.message_id if query.message else None)
         if not quiz or quiz.get("used"):
@@ -5644,7 +5668,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         success_text = f"""✅ Purchase Successful & Cards Removed!
 
-👤 Buyer: {get_mention(buy_info['buyer_id'], user.first_name)}
+?? Buyer: {get_mention(buy_info['buyer_id'], user.first_name)}
 👤 Seller: {get_mention(seller_id, buy_info['seller_name'])}
 
 🎴 Cards successfully removed from seller's inventory."""
