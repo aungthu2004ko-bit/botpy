@@ -1141,7 +1141,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_pending_bets[user.id] = {"round_id": round_id, "side": side}
             side_name = "🐅 ကျား (TIGER)" if side == "T" else "🐉 နဂါး (DRAGON)"
             return await _safe_reply_text(update.effective_message, 
-                f"---------\n{side_name} ကို ရွေးထားပါတယ်။\n"
+                f"━━━━━━━━━━━━━━━━━━\n{side_name} ကို ရွေးထားပါတယ်။\n"
                 "💰 လောင်းကြေးပမာဏကို ရိုက်ထည့်ပါ။\n"
                 "အနည်းဆုံး 1 မှ အများဆုံး 100,000 Kachi\n"
                 "ဥပမာ — 5000")
@@ -2082,17 +2082,17 @@ async def kprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [
         "❄️ Kachi USER profile",
-        "---------",
+        "━━━━━━━━━━━━━━━━━━",
         f"◉▷ Name - {name_line}",
         f"◉▷ ID - <code>{user.id}</code>",
         f"◉▷ Total Kachi Character - {total_cards}",
-        "---------",
+        "━━━━━━━━━━━━━━━━━━",
         "",
     ]
     for rarity, emoji, label in rarity_order:
         lines.append(f"❂ <i>Rarity</i> {emoji} : {label} - {rarity_counts.get(rarity, 0)}")
     lines.extend([
-        "---------",
+        "━━━━━━━━━━━━━━━━━━",
         "",
         f"🚫 Ban - {ban_status}",
         f"⭕ Mute - {mute_status}",
@@ -2236,7 +2236,7 @@ async def ktop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [
         "KTOP GLOBAL🌍 ( Leaderboard ) 🎖",
-        "---------",
+        "▰▱▰▱▰▱▰▱▰▱▰",
         ""
     ]
     medals = ["🥇", "🥈", "🥉"]
@@ -2249,7 +2249,7 @@ async def ktop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lines.append(f"{prefix}")
     lines.append("")
-    lines.append("---------")
+    lines.append("▰▱▰▱▰▱▰▱▰▱▰")
     text = "\n".join(lines)
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML")
 
@@ -2277,7 +2277,7 @@ async def kgtop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [
         "KTOP IN GROUP🦊",
         "    ( Leaderboard ) 🎖",
-        "---------",
+        "▰▱▰▱▰▱▰▱▰▱▰▱",
         ""
     ]
     medals = ["🥇", "🥈", "🥉"]
@@ -2289,7 +2289,7 @@ async def kgtop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{prefix} {mention} - {r['total_cards']} Cards")
         else:
             lines.append(f"{prefix}")
-    lines.append("---------")
+    lines.append("▰▱▰▱▰▱▰▱▰▱▰▱")
     text = "\n".join(lines)
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML")
 
@@ -2345,7 +2345,7 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "DAILY 🌍TOP -15-  KGAME,  PLAYERS",
         "",
         "Players              Total Kachi Win",
-        "---------"
+        "▰▱▰▱▰▱▰▱▰▱▰"
     ]
     medals = ["🥇", "🥈", "🥉"]
     for i in range(15):
@@ -2356,15 +2356,23 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{prefix} {mention} - {r['daily_kg_win']} Kachi")
         else:
             lines.append(f"{prefix}")
-    lines.append("---------")
+    lines.append("▰▱▰▱▰▱▰▱▰▱▰")
     text = "\n".join(lines)
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML")
 
-async def render_tdc_view(target, context: ContextTypes.DEFAULT_TYPE, days_ago: int = 0):
-    """Render today's or yesterday's Daily Catcher Top 15."""
-    days_ago = 1 if int(days_ago) == 1 else 0
+@restricted_command
+async def tdc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Daily Catcher Top 15: count successful automatic drops only.
+
+    daily_spawn_claims is incremented only in mm_cmd when a spawned drop is
+    successfully claimed. /pre and /kbox do not write to this table.
+    """
+    if not await check_force_join(update, context):
+        return
+
+    # Match the bot's existing daily catch-limit timezone (Myanmar UTC+06:30).
     claim_date = (datetime.datetime.now(datetime.timezone.utc)
-                  + datetime.timedelta(hours=6, minutes=30)).date() - datetime.timedelta(days=days_ago)
+                  + datetime.timedelta(hours=6, minutes=30)).date()
 
     async with db_pool.acquire() as conn:
         top_users = await conn.fetch("""
@@ -2378,13 +2386,12 @@ async def render_tdc_view(target, context: ContextTypes.DEFAULT_TYPE, days_ago: 
             LIMIT 15
         """, claim_date)
 
-    day_label = "TODAY" if days_ago == 0 else "YESTERDAY"
     lines = [
         "🏆 DAILY CATCHER TOP 15",
-        f"📅 {claim_date.strftime('%d %b %Y')} — {day_label}",
+        f"📅 {claim_date.strftime('%d %b %Y')}",
         "",
         "Successful Drop Catchers",
-        "---------",
+        "▰▱▰▱▰▱▰▱▰▱▰",
     ]
     medals = ["🥇", "🥈", "🥉"]
     for i in range(15):
@@ -2395,31 +2402,14 @@ async def render_tdc_view(target, context: ContextTypes.DEFAULT_TYPE, days_ago: 
             lines.append(f"{prefix} {mention} — {row['total_catches']} catches")
         else:
             lines.append(f"{prefix} —")
-    lines.append("---------")
-    lines.append("Only successful automatic card drops are counted. /pre and /kbox are excluded.")
+    lines.append("▰▱▰▱▰▱▰▱▰▱▰")
+    lines.append("\nOnly successful automatic card drops are counted. /pre and /kbox are excluded.")
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("◀ Back", callback_data="tdc_0", style="primary"),
-        InlineKeyboardButton("Next ▶", callback_data="tdc_1", style="primary"),
-    ]])
-
-    if hasattr(target, "edit_message_text"):
-        await target.edit_message_text(
-            text="\\n".join(lines), parse_mode="HTML", reply_markup=keyboard
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=target.effective_chat.id,
-            text="\\n".join(lines), parse_mode="HTML", reply_markup=keyboard
-        )
-
-
-@restricted_command
-async def tdc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Daily Catcher Top 15 with today/yesterday navigation."""
-    if not await check_force_join(update, context):
-        return
-    await render_tdc_view(update, context, days_ago=0)
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="\n".join(lines),
+        parse_mode="HTML"
+    )
 
 
 @restricted_command
@@ -3255,10 +3245,6 @@ async def cad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             card = await conn.fetchrow("SELECT card_id, name, rarity FROM cards WHERE card_id = $1", card_id)
             if not card:
                 return await _safe_reply_text(msg, "❌ ဒီ Card ID ကို မတွေ့ပါ။")
-            if card["rarity"] in ("Beyond", "Kryora", "Raiden"):
-                return await _safe_reply_text(
-                    msg, "❌ Beyond, Kryora နဲ့ Raiden Rarity ကဒ်တွေကို /cad နဲ့ ယူလို့မရပါ။"
-                )
             if not await add_user_card_with_limit(conn, user.id, card_id, amount):
                 return await _safe_reply_text(msg, "❌ ဒီကဒ်ကို အများဆုံး 3x ပဲ ပိုင်ဆိုင်နိုင်ပါတယ်။")
             await conn.execute(
@@ -3720,7 +3706,7 @@ HAREM PAGE{mode_title} ({page + 1}/{total_pages})"""
     content_blocks = ["Collection"]
     for col_name, cards_in_col in collections_dict.items():
         content_blocks.append("")
-        content_blocks.append(f"🍀 {col_name}\n---------")
+        content_blocks.append(f"🍀 {col_name}\n━━━━━━━━━━━━━━━━━━")
         for c in cards_in_col:
             r_emoji = get_rarity_emoji(c.get('rarity'))
             count_str = f" ({c['amount']}x)" if c['amount'] > 1 else " (1x)"
@@ -4369,7 +4355,7 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🐞 Collection Name
 {col_name}
----------
+━━━━━━━━━━━━━━━━━━
 {card['card_id']} - {card['name']}
 [ {get_rarity_emoji(r)} · {r_display} ]
 
@@ -4852,15 +4838,15 @@ def tg_game_keyboard(round_id, bot_username):
 
 def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွင့်ထားသည်"):
     return (
-        "---------\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "🐅 ကျားနဂါးတိုက်ပွဲ 🐉\n"
         "TIGER  ⚔️  DRAGON\n"
-        "---------\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         "🐅 ကျား TIGER\n"
         f"💰 {round_state['tiger_total']:,} Kachi\n\n"
         "🐉 နဂါး DRAGON\n"
         f"💰 {round_state['dragon_total']:,} Kachi\n"
-        "---------\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         f"⏳ {status}\n"
         "💎 အများဆုံးလောင်းကြေး — 100,000 Kachi\n\n"
         "👇 အောက်က ခလုတ်နဲ့ ဘက်ရွေးပြီး Bot DM မှာ လောင်းကြေးထည့်ပါ"
@@ -4869,9 +4855,9 @@ def tg_game_text(round_state, status="🟢 လောင်းကြေးဖွ�
 
 def tg_result_text(round_state, tiger_label, dragon_label, result_label, winners):
     text = (
-        "---------\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         "🏁 TIGER  VS  DRAGON — RESULT\n"
-        "---------\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
         f"🐅 Tiger: {tiger_label}\n"
         f"🐉 Dragon: {dragon_label}\n\n"
         f"{result_label}\n\n"
@@ -5135,11 +5121,11 @@ async def tg_bet_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         tg_pending_bets.pop(user.id, None)
 
     await _safe_reply_text(msg, 
-        f"---------\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
         f"✅ BET CONFIRMED\n"
         f"{side_name} ဘက် — {amount:,} Kachi\n"
         f"💰 လက်ကျန် — {updated['coins']:,} Kachi\n"
-        f"---------\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
         "ပွဲရလဒ်ကို Channel မှာ ကြည့်နိုင်ပါတယ်။",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📣 Channel ကို ပြန်သွားမယ်", url="https://t.me/beyondpoe", style="primary")]])
@@ -5242,16 +5228,6 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query and query.data and query.data.startswith("tdc_"):
-        try:
-            days_ago = int(query.data.split("_", 1)[1])
-        except (ValueError, IndexError):
-            return await query.answer("Invalid page.", show_alert=True)
-        if days_ago not in (0, 1):
-            return await query.answer("ဒီနေ့နဲ့ မနေ့ကစာရင်းကိုသာ ကြည့်နိုင်ပါတယ်။", show_alert=True)
-        await render_tdc_view(query, context, days_ago=days_ago)
-        await query.answer()
-        return
     if query and query.data and query.data.startswith("highquiz_"):
         quiz = active_high_rarity_quizzes.get(query.message.message_id if query.message else None)
         if not quiz or quiz.get("used"):
