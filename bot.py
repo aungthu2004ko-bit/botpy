@@ -3173,10 +3173,10 @@ async def ttcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 locked_kryora_count = len(locked_kryora)
 
         await status_msg.edit_text(
-            "✅ Card ownership audit completed.\\n\\n"
-            f"👥 Users corrected: {affected_users}\\n"
-            f"🎴 Card records corrected: {affected_rows}\\n"
-            f"🔒 Kryora cards auto-locked: {locked_kryora_count}\\n"
+            "✅ Card ownership audit completed.\n\n"
+            f"👥 Users corrected: {affected_users}\n"
+            f"🎴 Card records corrected: {affected_rows}\n"
+            f"🔒 Kryora cards auto-locked: {locked_kryora_count}\n"
             "📌 No user can keep more than 3 copies of the same card.",
             parse_mode="HTML"
         )
@@ -3184,7 +3184,7 @@ async def ttcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"/fixcard failed for admin {user.id}: {type(e).__name__}: {e}")
         try:
             await status_msg.edit_text(
-                "❌ /fixcard failed while checking the database.\\n"
+                "❌ /fixcard failed while checking the database.\n"
                 f"<code>{type(e).__name__}: {str(e)[:700]}</code>",
                 parse_mode="HTML"
             )
@@ -4224,7 +4224,7 @@ async def render_see_rarity_page(query, context, owner_id, rarity, page):
         buttons.append(nav)
     buttons.append([InlineKeyboardButton("↩️ Back Menu", callback_data=f"see_menu_{owner_id}")])
     await query.edit_message_text(
-        "\\n".join(lines), parse_mode="HTML",
+        "\n".join(lines), parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
@@ -4642,7 +4642,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_chat = await context.bot.get_chat(target_ref)
             await context.bot.send_message(
                 chat_id=target_chat.id,
-                text=f"🦋 Message \\n\\n{msg.text}"
+                text=f"🦋 Message \n\n{msg.text}"
             )
             return await _safe_reply_text(msg, "✅ Message sent to the group.")
         except Exception as e:
