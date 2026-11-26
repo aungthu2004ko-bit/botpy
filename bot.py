@@ -4683,7 +4683,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
                 sent_message = await context.bot.send_message(
                     chat_id=target_chat.id,
-                    text=f"🦋 Message \\n\\n{msg.text}",
+                    text=f"🦋 Message \n\n{msg.text}",
                     reply_markup=keyboard
                 )
                 async with db_pool.acquire() as conn:
