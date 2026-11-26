@@ -363,6 +363,15 @@ async def _init_db_once():
                 user_id BIGINT NOT NULL,
                 PRIMARY KEY (message_key, user_id)
             );
+            CREATE TABLE IF NOT EXISTS send_message_reactions (
+                message_key TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                reaction TEXT NOT NULL CHECK (reaction IN ('like', 'chee')),
+                PRIMARY KEY (message_key, user_id)
+            );
+            INSERT INTO send_message_reactions(message_key, user_id, reaction)
+            SELECT message_key, user_id, 'like' FROM send_message_like_users
+            ON CONFLICT (message_key, user_id) DO NOTHING;
             CREATE TABLE IF NOT EXISTS active_card_drops (
                 chat_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL,
@@ -4231,20 +4240,48 @@ async def see_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted_command
 async def send_group_prompt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if not context.args: return await _safe_reply_text(update.effective_message,"Usage: /send gplink [gplink ...]")
-    refs=[]
-    for raw in context.args:
-        link=raw if raw.startswith(("https://t.me/","http://t.me/")) else "https://t.me/"+raw.lstrip("@/")
-        im=re.search(r"t\.me/c/(\d+)",link); pm=re.search(r"(?:t\.me/)([A-Za-z0-9_]+)",link)
-        if im: ref=int("-100"+im.group(1))
-        elif pm: ref="@"+pm.group(1)
-        elif re.fullmatch(r"-?\d+",raw): ref=int(raw)
-        else: return await _safe_reply_text(update.effective_message,"❌ Invalid group link or chat ID: "+raw)
-        refs.append(ref)
-    pending_group_sends[update.effective_user.id]={"targets":refs}
-    await _safe_reply_text(update.effective_message,"Send the message text to broadcast to these groups.")
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        return await _safe_reply_text(update.effective_message, "Usage: /send gplink [gplink ...] or /send all <minimum members>")
 
+    if context.args[0].lower() == "all":
+        if len(context.args) != 2 or not context.args[1].isdigit():
+            return await _safe_reply_text(update.effective_message, "Usage: /send all <minimum members>")
+        minimum_members = int(context.args[1])
+        async with db_pool.acquire() as conn:
+            known_groups = await conn.fetch("SELECT chat_id FROM groups")
+        targets = []
+        checked = 0
+        for group in known_groups:
+            try:
+                count = await context.bot.get_chat_member_count(chat_id=group["chat_id"])
+                checked += 1
+                if count >= minimum_members:
+                    targets.append(group["chat_id"])
+            except Exception as e:
+                print(f"/send all lookup failed for {group['chat_id']}: {type(e).__name__}: {e}")
+        if not targets:
+            return await _safe_reply_text(update.effective_message, f"❌ Member {minimum_members}+ ရှိတဲ့ group မတွေ့ပါ။ Checked: {checked}")
+        pending_group_sends[update.effective_user.id] = {"targets": targets}
+        return await _safe_reply_text(update.effective_message, f"📨 Group {len(targets)} ခု ရွေးထားပါတယ်။ Member {minimum_members}+\nပို့မယ့် message ကို ပို့ပေးပါ။")
+
+    refs = []
+    for raw in context.args:
+        link = raw if raw.startswith(("https://t.me/", "http://t.me/")) else "https://t.me/" + raw.lstrip("@/")
+        internal = re.search(r"t\.me/c/(\d+)", link)
+        public = re.search(r"(?:t\.me/)([A-Za-z0-9_]+)", link)
+        if internal:
+            ref = int("-100" + internal.group(1))
+        elif public:
+            ref = "@" + public.group(1)
+        elif re.fullmatch(r"-?\d+", raw):
+            ref = int(raw)
+        else:
+            return await _safe_reply_text(update.effective_message, "❌ Invalid group link or chat ID: " + raw)
+        refs.append(ref)
+    pending_group_sends[update.effective_user.id] = {"targets": refs}
+    await _safe_reply_text(update.effective_message, "Send the message text to broadcast to these groups.")
 
 @restricted_command
 async def seelock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4619,23 +4656,34 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user.id == ADMIN_ID and user.id in pending_group_sends and msg.text and not msg.text.startswith("/"):
-        pending=pending_group_sends.pop(user.id); targets=pending["targets"]
-        successes=0; failures=0
-        async with db_pool.acquire() as conn:
-            total=await conn.fetchval("SELECT COUNT(*) FROM send_message_like_users")
-        for target_ref in targets:
+        pending = pending_group_sends.pop(user.id)
+        successes = 0
+        failures = 0
+        for target_ref in pending["targets"]:
             try:
-                chat=await context.bot.get_chat(target_ref)
-                key=f"{uuid.uuid4()}"
-                keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(f"Like ❤️ {int(total or 0)}",callback_data=f"sendlike_{key}",style="primary")]])
-                sent_message=await context.bot.send_message(chat_id=chat.id,text=f"🦋 Message \n\n{msg.text}",reply_markup=keyboard)
+                target_chat = await context.bot.get_chat(target_ref)
+                key = str(uuid.uuid4())
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("Like❤ 0", callback_data=f"sreact_{key}_like", style="primary"),
+                        InlineKeyboardButton("Chee💩 0", callback_data=f"sreact_{key}_chee", style="danger"),
+                    ],
+                    [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
+                ])
+                sent_message = await context.bot.send_message(
+                    chat_id=target_chat.id, text=f"🦋 Message \
+\n{msg.text}", reply_markup=keyboard
+                )
                 async with db_pool.acquire() as conn:
-                    await conn.execute("INSERT INTO send_message_likes(message_key,total_likes,chat_id,message_id) VALUES($1,0,$2,$3)",key,chat.id,sent_message.message_id)
-                successes+=1
+                    await conn.execute(
+                        "INSERT INTO send_message_likes(message_key,total_likes,chat_id,message_id) VALUES($1,0,$2,$3)",
+                        key, target_chat.id, sent_message.message_id
+                    )
+                successes += 1
             except Exception as e:
-                failures+=1; print(f"/send delivery failed: {type(e).__name__}: {e}")
-        return await _safe_reply_text(msg,f"✅ Sent: {successes} | Failed: {failures}")
-
+                failures += 1
+                print(f"/send delivery failed: {type(e).__name__}: {e}")
+        return await _safe_reply_text(msg, f"✅ Sent: {successes} | Failed: {failures}")
 
     asyncio.create_task(register_user_group(user, chat, context))
 
@@ -5322,24 +5370,48 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query and query.data and query.data.startswith("sendlike_"):
-        key=query.data[len("sendlike_"):]; uid=query.from_user.id
+    if query and query.data and query.data.startswith("sreact_"):
+        parts = query.data.split("_")
+        if len(parts) != 3 or parts[2] not in ("like", "chee"):
+            return await query.answer("Invalid reaction.", show_alert=True)
+        key, reaction = parts[1], parts[2]
+        uid = query.from_user.id
         async with db_pool.acquire() as conn:
             async with conn.transaction():
-                exists=await conn.fetchval("SELECT 1 FROM send_message_like_users WHERE message_key=$1 AND user_id=$2",key,uid)
-                if exists: return await query.answer("You already liked this message.")
-                await conn.execute("INSERT INTO send_message_like_users(message_key,user_id) VALUES($1,$2)",key,uid)
-                await conn.execute("UPDATE send_message_likes SET total_likes=total_likes+1 WHERE message_key=$1",key)
-                total=await conn.fetchval("SELECT COUNT(*) FROM send_message_like_users")
-                sent_messages=await conn.fetch("SELECT message_key,chat_id,message_id FROM send_message_likes WHERE chat_id IS NOT NULL AND message_id IS NOT NULL")
-        # Show the same all-time total on every /send message, including messages in other groups.
-        for sent_row in sent_messages:
+                exists = await conn.fetchval(
+                    "SELECT reaction FROM send_message_reactions WHERE message_key=$1 AND user_id=$2", key, uid
+                )
+                if exists:
+                    return await query.answer("ဒီ message ကို reaction ပေးပြီးပါပြီ။ တစ်ခုသာပေးလို့ရပါတယ်။")
+                inserted = await conn.fetchval(
+                    """INSERT INTO send_message_reactions(message_key,user_id,reaction)
+                       VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING reaction""", key, uid, reaction
+                )
+                if not inserted:
+                    return await query.answer("ဒီ message ကို reaction ပေးပြီးပါပြီ။")
+                counts = await conn.fetchrow(
+                    """SELECT COUNT(*) FILTER (WHERE reaction='like') AS likes,
+                              COUNT(*) FILTER (WHERE reaction='chee') AS chees
+                       FROM send_message_reactions WHERE message_key=$1""", key
+                )
+                row = await conn.fetchrow(
+                    "SELECT chat_id,message_id FROM send_message_likes WHERE message_key=$1", key
+                )
+        if row:
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(f"Like❤ {counts['likes']}", callback_data=f"sreact_{key}_like", style="primary"),
+                    InlineKeyboardButton(f"Chee💩 {counts['chees']}", callback_data=f"sreact_{key}_chee", style="danger"),
+                ],
+                [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
+            ])
             try:
-                markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"Like ❤️ {int(total or 0)}",callback_data=f"sendlike_{sent_row['message_key']}",style="primary")]])
-                await context.bot.edit_message_reply_markup(chat_id=sent_row['chat_id'],message_id=sent_row['message_id'],reply_markup=markup)
+                await context.bot.edit_message_reply_markup(
+                    chat_id=row["chat_id"], message_id=row["message_id"], reply_markup=markup
+                )
             except Exception:
                 pass
-        return await query.answer("Liked ❤️")
+        return await query.answer("Like❤" if reaction == "like" else "Chee💩")
     if query and query.data and query.data.startswith("tdcpage_"):
         parts=query.data[len("tdcpage_"):].split("_"); date=datetime.date.fromisoformat(parts[0]); page=int(parts[1])
         await query.answer()
