@@ -366,9 +366,14 @@ async def _init_db_once():
             CREATE TABLE IF NOT EXISTS send_message_reactions (
                 message_key TEXT NOT NULL,
                 user_id BIGINT NOT NULL,
-                reaction TEXT NOT NULL CHECK (reaction IN ('like', 'chee')),
+                reaction TEXT NOT NULL,
                 PRIMARY KEY (message_key, user_id)
             );
+            ALTER TABLE send_message_reactions
+                DROP CONSTRAINT IF EXISTS send_message_reactions_reaction_check;
+            ALTER TABLE send_message_reactions
+                ADD CONSTRAINT send_message_reactions_reaction_check
+                CHECK (reaction IN ('like', 'chee', 'haha'));
             INSERT INTO send_message_reactions(message_key, user_id, reaction)
             SELECT message_key, user_id, 'like' FROM send_message_like_users
             ON CONFLICT (message_key, user_id) DO NOTHING;
@@ -4663,16 +4668,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 target_chat = await context.bot.get_chat(target_ref)
                 key = str(uuid.uuid4())
+                async with db_pool.acquire() as conn:
+                    star_total = await conn.fetchval(
+                        "SELECT COUNT(*) FROM send_message_reactions"
+                    )
                 keyboard = InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton("Like❤ 0", callback_data=f"sreact_{key}_like", style="primary"),
                         InlineKeyboardButton("Chee💩 0", callback_data=f"sreact_{key}_chee", style="danger"),
+                        InlineKeyboardButton("HaHa😂 0", callback_data=f"sreact_{key}_haha"),
                     ],
                     [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
+                    [InlineKeyboardButton(f"⭐ {star_total}", callback_data="sreact_total")],
                 ])
                 sent_message = await context.bot.send_message(
-                    chat_id=target_chat.id, text=f"🦋 Message \
-\n{msg.text}", reply_markup=keyboard
+                    chat_id=target_chat.id,
+                    text=f"🦋 Message \\n\\n{msg.text}",
+                    reply_markup=keyboard
                 )
                 async with db_pool.acquire() as conn:
                     await conn.execute(
@@ -5372,46 +5384,86 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query and query.data and query.data.startswith("sreact_"):
         parts = query.data.split("_")
-        if len(parts) != 3 or parts[2] not in ("like", "chee"):
+        if query.data == "sreact_total":
+            return await query.answer("⭐ Total reactions across all /send messages.")
+        if len(parts) != 3 or parts[2] not in ("like", "chee", "haha"):
             return await query.answer("Invalid reaction.", show_alert=True)
         key, reaction = parts[1], parts[2]
         uid = query.from_user.id
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 exists = await conn.fetchval(
-                    "SELECT reaction FROM send_message_reactions WHERE message_key=$1 AND user_id=$2", key, uid
+                    "SELECT reaction FROM send_message_reactions WHERE message_key=$1 AND user_id=$2",
+                    key, uid
                 )
                 if exists:
-                    return await query.answer("ဒီ message ကို reaction ပေးပြီးပါပြီ။ တစ်ခုသာပေးလို့ရပါတယ်။")
+                    return await query.answer(
+                        "ဒီ message ကို reaction ပေးပြီးပါပြီ။ တစ်ခုသာပေးလို့ရပါတယ်။"
+                    )
                 inserted = await conn.fetchval(
                     """INSERT INTO send_message_reactions(message_key,user_id,reaction)
-                       VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING reaction""", key, uid, reaction
+                       VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING reaction""",
+                    key, uid, reaction
                 )
                 if not inserted:
                     return await query.answer("ဒီ message ကို reaction ပေးပြီးပါပြီ။")
-                counts = await conn.fetchrow(
-                    """SELECT COUNT(*) FILTER (WHERE reaction='like') AS likes,
-                              COUNT(*) FILTER (WHERE reaction='chee') AS chees
-                       FROM send_message_reactions WHERE message_key=$1""", key
+                star_total = await conn.fetchval(
+                    "SELECT COUNT(*) FROM send_message_reactions"
                 )
-                row = await conn.fetchrow(
-                    "SELECT chat_id,message_id FROM send_message_likes WHERE message_key=$1", key
+                per_message_counts = await conn.fetch(
+                    """SELECT message_key,
+                              COUNT(*) FILTER (WHERE reaction='like') AS likes,
+                              COUNT(*) FILTER (WHERE reaction='chee') AS chees,
+                              COUNT(*) FILTER (WHERE reaction='haha') AS hahas
+                       FROM send_message_reactions
+                       GROUP BY message_key"""
                 )
-        if row:
+                sent_messages = await conn.fetch(
+                    """SELECT message_key,chat_id,message_id
+                       FROM send_message_likes
+                       WHERE chat_id IS NOT NULL AND message_id IS NOT NULL"""
+                )
+        count_map = {r["message_key"]: r for r in per_message_counts}
+        # Reaction buttons show counts for that individual message.
+        # The star row shows the all-time total across every /send message.
+        for sent_row in sent_messages:
+            local = count_map.get(sent_row["message_key"])
+            likes = local["likes"] if local else 0
+            chees = local["chees"] if local else 0
+            hahas = local["hahas"] if local else 0
             markup = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton(f"Like❤ {counts['likes']}", callback_data=f"sreact_{key}_like", style="primary"),
-                    InlineKeyboardButton(f"Chee💩 {counts['chees']}", callback_data=f"sreact_{key}_chee", style="danger"),
+                    InlineKeyboardButton(
+                        f"Like❤ {likes}",
+                        callback_data=f"sreact_{sent_row['message_key']}_like",
+                        style="primary"
+                    ),
+                    InlineKeyboardButton(
+                        f"Chee💩 {chees}",
+                        callback_data=f"sreact_{sent_row['message_key']}_chee",
+                        style="danger"
+                    ),
+                    InlineKeyboardButton(
+                        f"HaHa😂 {hahas}",
+                        callback_data=f"sreact_{sent_row['message_key']}_haha"
+                    ),
                 ],
                 [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
+                [InlineKeyboardButton(f"⭐ {star_total}", callback_data="sreact_total")],
             ])
             try:
                 await context.bot.edit_message_reply_markup(
-                    chat_id=row["chat_id"], message_id=row["message_id"], reply_markup=markup
+                    chat_id=sent_row["chat_id"],
+                    message_id=sent_row["message_id"],
+                    reply_markup=markup
                 )
-            except Exception:
-                pass
-        return await query.answer("Like❤" if reaction == "like" else "Chee💩")
+            except Exception as e:
+                print(
+                    f"Reaction counter update failed for "
+                    f"{sent_row['chat_id']}/{sent_row['message_id']}: {e}"
+                )
+        label = {"like": "Like❤", "chee": "Chee💩", "haha": "HaHa😂"}[reaction]
+        return await query.answer(label)
     if query and query.data and query.data.startswith("tdcpage_"):
         parts=query.data[len("tdcpage_"):].split("_"); date=datetime.date.fromisoformat(parts[0]); page=int(parts[1])
         await query.answer()
