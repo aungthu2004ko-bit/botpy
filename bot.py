@@ -369,6 +369,14 @@ async def _init_db_once():
                 reaction TEXT NOT NULL,
                 PRIMARY KEY (message_key, user_id)
             );
+            CREATE TABLE IF NOT EXISTS send_broadcast_messages (
+                broadcast_key TEXT NOT NULL,
+                chat_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL,
+                PRIMARY KEY (broadcast_key, chat_id, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_send_broadcast_messages_key
+                ON send_broadcast_messages(broadcast_key);
             ALTER TABLE send_message_reactions
                 DROP CONSTRAINT IF EXISTS send_message_reactions_reaction_check;
             ALTER TABLE send_message_reactions
@@ -4664,32 +4672,39 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = pending_group_sends.pop(user.id)
         successes = 0
         failures = 0
+        # One reaction key per /send campaign, shared by every destination GP.
+        broadcast_key = str(uuid.uuid4())
+        async with db_pool.acquire() as conn:
+            star_total = await conn.fetchval(
+                "SELECT COUNT(*) FROM send_message_reactions"
+            )
         for target_ref in pending["targets"]:
             try:
                 target_chat = await context.bot.get_chat(target_ref)
-                key = str(uuid.uuid4())
-                async with db_pool.acquire() as conn:
-                    star_total = await conn.fetchval(
-                        "SELECT COUNT(*) FROM send_message_reactions"
-                    )
                 keyboard = InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("Like❤ 0", callback_data=f"sreact_{key}_like", style="primary"),
-                        InlineKeyboardButton("Chee💩 0", callback_data=f"sreact_{key}_chee", style="danger"),
-                        InlineKeyboardButton("HaHa😂 0", callback_data=f"sreact_{key}_haha"),
+                        InlineKeyboardButton("Like❤ 0", callback_data=f"sreact_{broadcast_key}_like", style="primary"),
+                        InlineKeyboardButton("Chee💩 0", callback_data=f"sreact_{broadcast_key}_chee", style="danger"),
+                        InlineKeyboardButton("HaHa😂 0", callback_data=f"sreact_{broadcast_key}_haha"),
                     ],
                     [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
                     [InlineKeyboardButton(f"⭐ {star_total}", callback_data="sreact_total")],
                 ])
                 sent_message = await context.bot.send_message(
                     chat_id=target_chat.id,
-                    text=f"🦋 Message \n\n{msg.text}",
+                    text=f"🦋 Message \\n\\n{msg.text}",
                     reply_markup=keyboard
                 )
                 async with db_pool.acquire() as conn:
+                    storage_key = str(uuid.uuid4())
                     await conn.execute(
                         "INSERT INTO send_message_likes(message_key,total_likes,chat_id,message_id) VALUES($1,0,$2,$3)",
-                        key, target_chat.id, sent_message.message_id
+                        storage_key, target_chat.id, sent_message.message_id
+                    )
+                    await conn.execute(
+                        """INSERT INTO send_broadcast_messages(broadcast_key,chat_id,message_id)
+                           VALUES($1,$2,$3) ON CONFLICT DO NOTHING""",
+                        broadcast_key, target_chat.id, sent_message.message_id
                     )
                 successes += 1
             except Exception as e:
@@ -5383,11 +5398,12 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query and query.data and query.data.startswith("sreact_"):
-        parts = query.data.split("_")
         if query.data == "sreact_total":
             return await query.answer("⭐ Total reactions across all /send messages.")
+        parts = query.data.split("_")
         if len(parts) != 3 or parts[2] not in ("like", "chee", "haha"):
             return await query.answer("Invalid reaction.", show_alert=True)
+
         key, reaction = parts[1], parts[2]
         uid = query.from_user.id
         async with db_pool.acquire() as conn:
@@ -5398,7 +5414,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 if exists:
                     return await query.answer(
-                        "ဒီ message ကို reaction ပေးပြီးပါပြီ။ တစ်ခုသာပေးလို့ရပါတယ်။"
+                        "ဒီ broadcast message ကို reaction ပေးပြီးပါပြီ။ တစ်ခုသာပေးလို့ရပါတယ်။"
                     )
                 inserted = await conn.fetchval(
                     """INSERT INTO send_message_reactions(message_key,user_id,reaction)
@@ -5406,64 +5422,60 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     key, uid, reaction
                 )
                 if not inserted:
-                    return await query.answer("ဒီ message ကို reaction ပေးပြီးပါပြီ။")
+                    return await query.answer("ဒီ broadcast message ကို reaction ပေးပြီးပါပြီ။")
+
+                counts = await conn.fetchrow(
+                    """SELECT
+                         COUNT(*) FILTER (WHERE reaction='like') AS likes,
+                         COUNT(*) FILTER (WHERE reaction='chee') AS chees,
+                         COUNT(*) FILTER (WHERE reaction='haha') AS hahas
+                       FROM send_message_reactions WHERE message_key=$1""",
+                    key
+                )
                 star_total = await conn.fetchval(
                     "SELECT COUNT(*) FROM send_message_reactions"
                 )
-                per_message_counts = await conn.fetch(
-                    """SELECT message_key,
-                              COUNT(*) FILTER (WHERE reaction='like') AS likes,
-                              COUNT(*) FILTER (WHERE reaction='chee') AS chees,
-                              COUNT(*) FILTER (WHERE reaction='haha') AS hahas
-                       FROM send_message_reactions
-                       GROUP BY message_key"""
+                copies = await conn.fetch(
+                    """SELECT chat_id,message_id FROM send_broadcast_messages
+                       WHERE broadcast_key=$1""",
+                    key
                 )
-                sent_messages = await conn.fetch(
-                    """SELECT message_key,chat_id,message_id
-                       FROM send_message_likes
-                       WHERE chat_id IS NOT NULL AND message_id IS NOT NULL"""
-                )
-        count_map = {r["message_key"]: r for r in per_message_counts}
-        # Reaction buttons show counts for that individual message.
-        # The star row shows the all-time total across every /send message.
-        for sent_row in sent_messages:
-            local = count_map.get(sent_row["message_key"])
-            likes = local["likes"] if local else 0
-            chees = local["chees"] if local else 0
-            hahas = local["hahas"] if local else 0
-            markup = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        f"Like❤ {likes}",
-                        callback_data=f"sreact_{sent_row['message_key']}_like",
-                        style="primary"
-                    ),
-                    InlineKeyboardButton(
-                        f"Chee💩 {chees}",
-                        callback_data=f"sreact_{sent_row['message_key']}_chee",
-                        style="danger"
-                    ),
-                    InlineKeyboardButton(
-                        f"HaHa😂 {hahas}",
-                        callback_data=f"sreact_{sent_row['message_key']}_haha"
-                    ),
-                ],
-                [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
-                [InlineKeyboardButton(f"⭐ {star_total}", callback_data="sreact_total")],
-            ])
+                if not copies:
+                    copies = await conn.fetch(
+                        """SELECT chat_id,message_id FROM send_message_likes
+                           WHERE message_key=$1 AND chat_id IS NOT NULL AND message_id IS NOT NULL""",
+                        key
+                    )
+
+        label = {"like": "Like❤", "chee": "Chee💩", "haha": "HaHa😂"}[reaction]
+        await query.answer(label)
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"Like❤ {counts['likes']}", callback_data=f"sreact_{key}_like", style="primary"),
+                InlineKeyboardButton(f"Chee💩 {counts['chees']}", callback_data=f"sreact_{key}_chee", style="danger"),
+                InlineKeyboardButton(f"HaHa😂 {counts['hahas']}", callback_data=f"sreact_{key}_haha"),
+            ],
+            [InlineKeyboardButton("Cm🖱", url=MAIN_GROUP_LINK)],
+            [InlineKeyboardButton(f"⭐ {star_total}", callback_data="sreact_total")],
+        ])
+
+        async def update_copy(copy):
             try:
                 await context.bot.edit_message_reply_markup(
-                    chat_id=sent_row["chat_id"],
-                    message_id=sent_row["message_id"],
+                    chat_id=copy["chat_id"],
+                    message_id=copy["message_id"],
                     reply_markup=markup
                 )
             except Exception as e:
                 print(
                     f"Reaction counter update failed for "
-                    f"{sent_row['chat_id']}/{sent_row['message_id']}: {e}"
+                    f"{copy['chat_id']}/{copy['message_id']}: {e}"
                 )
-        label = {"like": "Like❤", "chee": "Chee💩", "haha": "HaHa😂"}[reaction]
-        return await query.answer(label)
+
+        if copies:
+            await asyncio.gather(*(update_copy(copy) for copy in copies))
+        return
     if query and query.data and query.data.startswith("tdcpage_"):
         parts=query.data[len("tdcpage_"):].split("_"); date=datetime.date.fromisoformat(parts[0]); page=int(parts[1])
         await query.answer()
