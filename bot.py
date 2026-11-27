@@ -1678,9 +1678,17 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
     try:
         if card['type'] == 'photo':
-            await context.bot.send_photo(chat.id, card['file_id'], caption=caption, parse_mode='HTML', reply_markup=keyboard)
+            await context.bot.send_photo(
+                chat.id, card['file_id'], caption=caption, parse_mode='HTML',
+                reply_markup=keyboard, reply_to_message_id=msg.message_id,
+                allow_sending_without_reply=True
+            )
         else:
-            await context.bot.send_video(chat.id, card['file_id'], caption=caption, parse_mode='HTML', reply_markup=keyboard)
+            await context.bot.send_video(
+                chat.id, card['file_id'], caption=caption, parse_mode='HTML',
+                reply_markup=keyboard, reply_to_message_id=msg.message_id,
+                allow_sending_without_reply=True
+            )
     except Exception as e:
         print(f"Could not send claimed card: {e}")
         await _safe_reply_text(msg, caption, parse_mode='HTML', reply_markup=keyboard)
@@ -3358,23 +3366,40 @@ async def kfav_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_favorite_word_card(message, context, user_id, trigger_word):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT c.name,c.type,c.file_id,w.bio_text
+            """SELECT c.card_id,c.name,c.type,c.file_id,w.bio_text
                FROM user_favorite_words w JOIN cards c ON c.card_id=w.card_id
                WHERE w.user_id=$1 AND LOWER(w.trigger_word)=LOWER($2)""",
             user_id, trigger_word
         )
     if not row:
         return False
-    caption = f"{html.escape(row['name'] or '')}\n{html.escape(row['bio_text'] or '')}"
+    caller = message.from_user
+    caller_name = caller.first_name if caller else "User"
+    mention = get_mention(caller.id, caller_name) if caller else html.escape(caller_name)
+    caption = (
+        f"❖ {mention}\n"
+        f"❖ {html.escape(row['name'] or '')}\n"
+        f"❖ <code>{html.escape(str(row['card_id']))}</code>\n\n"
+        f"♥{html.escape(row['bio_text'] or '')}♥"
+    )
     try:
         if row['type'] == 'photo':
-            await context.bot.send_photo(chat_id=message.chat_id, photo=row['file_id'], caption=caption)
+            await context.bot.send_photo(
+                chat_id=message.chat_id, photo=row['file_id'], caption=caption,
+                parse_mode="HTML", reply_to_message_id=message.message_id,
+                allow_sending_without_reply=True
+            )
         else:
-            await context.bot.send_video(chat_id=message.chat_id, video=row['file_id'], caption=caption)
+            await context.bot.send_video(
+                chat_id=message.chat_id, video=row['file_id'], caption=caption,
+                parse_mode="HTML", reply_to_message_id=message.message_id,
+                allow_sending_without_reply=True
+            )
         return True
     except Exception as e:
         print(f"Favorite word card send failed: {type(e).__name__}: {e}")
         return False
+
 
 @restricted_command
 async def khmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4716,7 +4741,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 pending_fav["trigger_word"] = value
                 pending_fav["stage"] = "bio"
-                return await _safe_reply_text(msg, "ကဒ် Bio စာသား သတ်မှတ်ပေးပါ။")
+                return await _safe_reply_text(msg, "ဒီစာကို Reply ပြန်ပြီး ကဒ် Bio စာသား ပို့ပေးပါ။")
             if pending_fav.get("stage") == "bio":
                 async with db_pool.acquire() as conn:
                     await conn.execute(
@@ -5472,7 +5497,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "words":
             pending_favorite_words[owner_id] = {"stage": "trigger", "card_id": card_id}
             await query.answer()
-            return await context.bot.send_message(query.message.chat_id if query.message else owner_id, "RP ထောက်ပြီး သတ်မှတ်မဲ့စာကို ပို့ပေးပါ။ ဥပမာ - Hello")
+            return await context.bot.send_message(
+                chat_id=query.message.chat_id if query.message else owner_id,
+                text="ဒီစာကို Reply ပြန်ပြီး Set Words အတွက် Trigger စာသား ပို့ပေးပါ။ ဥပမာ - Hello",
+                reply_to_message_id=query.message.message_id if query.message else None,
+                allow_sending_without_reply=True
+            )
     if query and query.data and query.data.startswith("sendlike_"):
         key=query.data[len("sendlike_"):]; uid=query.from_user.id
         async with db_pool.acquire() as conn:
