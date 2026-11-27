@@ -189,6 +189,7 @@ pending_card_adds = {}
 pending_cc_channel_adds = {}
 pending_kachi_transfers = {}
 pending_card_buys = {}
+pending_favorite_words = {}
 pending_group_sends = {}
 active_kbox_users = set()  # Track ongoing Kbox sessions per user
 kshop_prices = {}  # Track shop card prices per user session
@@ -398,6 +399,16 @@ async def _init_db_once():
                 session_type TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS user_favorite_cards (
+                user_id BIGINT PRIMARY KEY,
+                card_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS user_favorite_words (
+                user_id BIGINT PRIMARY KEY,
+                trigger_word TEXT NOT NULL,
+                bio_text TEXT NOT NULL,
+                card_id TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS spam_restrictions (
                 user_id BIGINT PRIMARY KEY,
@@ -1048,15 +1059,23 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{user.id}", style="success")]
     ])
+    display_card = card
+    async with db_pool.acquire() as conn:
+        fav_display = await conn.fetchrow(
+            "SELECT c.type,c.file_id FROM user_favorite_cards f JOIN cards c ON c.card_id=f.card_id WHERE f.user_id=$1",
+            user.id
+        )
+    if fav_display:
+        display_card = fav_display
 
-    if card['type'] == 'photo':
+    if display_card['type'] == 'photo':
         try:
-            await _safe_reply_photo(msg, photo=card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
+            await _safe_reply_photo(msg, photo=display_card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
         except Exception:
             await _safe_reply_text(msg, caption_text, parse_mode="HTML", reply_markup=keyboard)
     else:
         try:
-            await _safe_reply_video(msg, video=card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
+            await _safe_reply_video(msg, video=display_card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
         except Exception:
             await _safe_reply_text(msg, caption_text, parse_mode="HTML", reply_markup=keyboard)
 
@@ -3296,6 +3315,67 @@ async def set_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await _safe_reply_text(update.effective_message, f"✅ Active profile card changed to {has_card['name']} for /kc.", parse_mode="HTML")
 
+
+@restricted_command
+async def kfav_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_force_join(update, context):
+        return
+    user, msg = update.effective_user, update.effective_message
+    if not context.args:
+        return await _safe_reply_text(msg, "❌ Usage: /kfav [Card ID]")
+    card_id = context.args[0].strip()
+    async with db_pool.acquire() as conn:
+        card = await conn.fetchrow(
+            "SELECT card_id,name,type,file_id,rarity,collection FROM cards WHERE card_id=$1", card_id
+        )
+        owned = await conn.fetchval(
+            "SELECT amount FROM user_cards WHERE user_id=$1 AND card_id=$2", user.id, card_id
+        )
+    if not card or not owned:
+        return await _safe_reply_text(msg, "❌ ဒီကဒ်ကို မပိုင်ဆိုင်ထားပါ။")
+    caption = (
+        f"🎴 {html.escape(card['name'] or 'Unknown')}\n"
+        f"🆔 <code>{html.escape(card['card_id'])}</code>\n"
+        f"🌟 {html.escape(get_rarity_display(card['rarity'] or 'Ten'))}\n"
+        f"📚 {html.escape(card['collection'] or 'N/A')}\n"
+        f"👤 Owner: {get_mention(user.id, user.first_name)}\n"
+        f"📦 Owned: {owned}x"
+    )
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Cancel", callback_data=f"kfav_cancel_{user.id}", style="danger"),
+        InlineKeyboardButton("Favorite", callback_data=f"kfav_set_{user.id}_{card_id}", style="success"),
+        InlineKeyboardButton("Set Words", callback_data=f"kfav_words_{user.id}_{card_id}", style="primary")
+    ]])
+    try:
+        if card['type'] == 'photo':
+            await _safe_reply_photo(msg, photo=card['file_id'], caption=caption, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await _safe_reply_video(msg, video=card['file_id'], caption=caption, parse_mode="HTML", reply_markup=keyboard)
+    except Exception:
+        await _safe_reply_text(msg, caption, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def send_favorite_word_card(message, context, user_id, trigger_word):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT c.name,c.type,c.file_id,w.bio_text
+               FROM user_favorite_words w JOIN cards c ON c.card_id=w.card_id
+               WHERE w.user_id=$1 AND LOWER(w.trigger_word)=LOWER($2)""",
+            user_id, trigger_word
+        )
+    if not row:
+        return False
+    caption = f"{html.escape(row['name'] or '')}\n{html.escape(row['bio_text'] or '')}"
+    try:
+        if row['type'] == 'photo':
+            await context.bot.send_photo(chat_id=message.chat_id, photo=row['file_id'], caption=caption)
+        else:
+            await context.bot.send_video(chat_id=message.chat_id, video=row['file_id'], caption=caption)
+        return True
+    except Exception as e:
+        print(f"Favorite word card send failed: {type(e).__name__}: {e}")
+        return False
+
 @restricted_command
 async def khmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_force_join(update, context):
@@ -3675,6 +3755,15 @@ HAREM PAGE{mode_title} ({page + 1}/{total_pages})
         active_card = next((c for c in user_card_rows if c['card_id'] == selected_card_id), None)
     if not active_card:
         active_card = user_card_rows[-1]
+
+    async with db_pool.acquire() as conn:
+        favorite_card = await conn.fetchrow(
+            "SELECT c.card_id,c.name,c.type,c.file_id,c.rarity,c.collection "
+            "FROM user_favorite_cards f JOIN cards c ON c.card_id=f.card_id WHERE f.user_id=$1",
+            target_id
+        )
+    if favorite_card:
+        active_card = favorite_card
 
     start_idx = page * per_page
     end_idx = start_idx + per_page
@@ -4618,6 +4707,32 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not chat or not msg or not user or user.is_bot:
         return
 
+    if msg.text and not msg.text.startswith("/"):
+        pending_fav = pending_favorite_words.get(user.id)
+        if pending_fav:
+            value = msg.text.strip()
+            if pending_fav.get("stage") == "trigger":
+                if not value:
+                    return
+                pending_fav["trigger_word"] = value
+                pending_fav["stage"] = "bio"
+                return await _safe_reply_text(msg, "ကဒ် Bio စာသား သတ်မှတ်ပေးပါ။")
+            if pending_fav.get("stage") == "bio":
+                async with db_pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO user_favorite_words(user_id,trigger_word,bio_text,card_id) "
+                        "VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET "
+                        "trigger_word=EXCLUDED.trigger_word,bio_text=EXCLUDED.bio_text,card_id=EXCLUDED.card_id",
+                        user.id, pending_fav["trigger_word"], value, pending_fav["card_id"]
+                    )
+                pending_favorite_words.pop(user.id, None)
+                return await _safe_reply_text(msg, "✅ Set Words သတ်မှတ်ပြီးပါပြီ။")
+        async with db_pool.acquire() as conn:
+            word_row = await conn.fetchrow("SELECT trigger_word FROM user_favorite_words WHERE user_id=$1", user.id)
+        if word_row and msg.text.strip().casefold() == word_row["trigger_word"].strip().casefold():
+            await send_favorite_word_card(msg, context, user.id, word_row["trigger_word"])
+            return
+
     if user.id == ADMIN_ID and user.id in pending_group_sends and msg.text and not msg.text.startswith("/"):
         pending=pending_group_sends.pop(user.id); targets=pending["targets"]
         successes=0; failures=0
@@ -4875,17 +4990,23 @@ Collection : {col_name}
 🔍 Check: /kc
 📖 Details: /card {card['card_id']}"""
 
-        # Kbox rewards must always be displayed with their original photo/video media.
-        # Never replace a failed media delivery with a text-only card result.
+        display_card = card
+        async with db_pool.acquire() as conn:
+            fav_display = await conn.fetchrow(
+                "SELECT c.type,c.file_id FROM user_favorite_cards f JOIN cards c ON c.card_id=f.card_id WHERE f.user_id=$1",
+                user_id
+            )
+        if fav_display:
+            display_card = fav_display
         try:
-            if card['type'] == 'photo':
+            if display_card['type'] == 'photo':
                 await bot.send_photo(
-                    chat_id=chat_id, photo=card['file_id'],
+                    chat_id=chat_id, photo=display_card['file_id'],
                     caption=result_caption, parse_mode="HTML"
                 )
             else:
                 await bot.send_video(
-                    chat_id=chat_id, video=card['file_id'],
+                    chat_id=chat_id, video=display_card['file_id'],
                     caption=result_caption, parse_mode="HTML"
                 )
         except Exception as send_error:
@@ -5322,6 +5443,36 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if query and query.data and query.data.startswith("kfav_"):
+        parts = query.data.split("_")
+        action = parts[1] if len(parts) > 1 else ""
+        owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        if owner_id != query.from_user.id:
+            return await query.answer("ဒီခလုတ်ကို ပိုင်ရှင်ပဲ အသုံးပြုနိုင်ပါတယ်။", show_alert=True)
+        if action == "cancel":
+            pending_favorite_words.pop(owner_id, None)
+            await query.answer("လုပ်ဆောင်ချက်ကို ပယ်ဖျက်လိုက်ပါပြီ။")
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            return
+        card_id = "_".join(parts[3:]) if len(parts) > 3 else ""
+        if action == "set":
+            async with db_pool.acquire() as conn:
+                owned = await conn.fetchval("SELECT 1 FROM user_cards WHERE user_id=$1 AND card_id=$2", owner_id, card_id)
+                if not owned:
+                    return await query.answer("ဒီကဒ်ကို မပိုင်ဆိုင်တော့ပါ။", show_alert=True)
+                await conn.execute(
+                    "INSERT INTO user_favorite_cards(user_id,card_id) VALUES($1,$2) "
+                    "ON CONFLICT(user_id) DO UPDATE SET card_id=EXCLUDED.card_id",
+                    owner_id, card_id
+                )
+            return await query.answer("Favorite Card သတ်မှတ်ပြီးပါပြီ။")
+        if action == "words":
+            pending_favorite_words[owner_id] = {"stage": "trigger", "card_id": card_id}
+            await query.answer()
+            return await context.bot.send_message(query.message.chat_id if query.message else owner_id, "RP ထောက်ပြီး သတ်မှတ်မဲ့စာကို ပို့ပေးပါ။ ဥပမာ - Hello")
     if query and query.data and query.data.startswith("sendlike_"):
         key=query.data[len("sendlike_"):]; uid=query.from_user.id
         async with db_pool.acquire() as conn:
@@ -6437,6 +6588,7 @@ def main():
     app.add_handler(CommandHandler("kbox", kbox_cmd))
     app.add_handler(CommandHandler("kdaily", kdaily_cmd))
     app.add_handler(CommandHandler("set", set_card_cmd))
+    app.add_handler(CommandHandler("kfav", kfav_cmd))
     app.add_handler(CommandHandler("kgift", kgift_cmd))
     app.add_handler(CommandHandler("rngift", rngift_cmd))
     app.add_handler(CommandHandler("card", card_detail_cmd))
