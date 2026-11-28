@@ -1673,7 +1673,7 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 if drop['winner_id'] is not None:
                     winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
-                    return await _safe_reply_text(msg, winner, parse_mode='HTML')
+                    return await _safe_reply_text(msg, f'🏆 ကတ်ရသူ - {winner}', parse_mode='HTML')
                 if drop['ended'] or float(drop['expires_at']) <= now:
                     return
 
@@ -2485,7 +2485,7 @@ async def create_redeem_code_cmd(update: Update, context: ContextTypes.DEFAULT_T
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS redeem_codes (
+                    CREATE TABLE IF NOT EXISTS kachi_redeem_codes_v2 (
                         code TEXT PRIMARY KEY,
                         amount BIGINT NOT NULL CHECK (amount > 0),
                         max_uses INT NOT NULL CHECK (max_uses > 0),
@@ -2495,20 +2495,20 @@ async def create_redeem_code_cmd(update: Update, context: ContextTypes.DEFAULT_T
                     )
                 """)
                 await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS redeem_code_uses (
-                        code TEXT NOT NULL REFERENCES redeem_codes(code) ON DELETE CASCADE,
+                    CREATE TABLE IF NOT EXISTS kachi_redeem_code_uses_v2 (
+                        code TEXT NOT NULL REFERENCES kachi_redeem_codes_v2(code) ON DELETE CASCADE,
                         user_id BIGINT NOT NULL,
                         redeemed_at BIGINT NOT NULL DEFAULT 0,
                         PRIMARY KEY (code, user_id)
                     )
                 """)
-                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS amount BIGINT NOT NULL DEFAULT 1")
-                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS max_uses INT NOT NULL DEFAULT 1")
-                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS used_count INT NOT NULL DEFAULT 0")
-                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0")
-                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0")
+                await conn.execute("ALTER TABLE kachi_redeem_codes_v2 ADD COLUMN IF NOT EXISTS amount BIGINT NOT NULL DEFAULT 1")
+                await conn.execute("ALTER TABLE kachi_redeem_codes_v2 ADD COLUMN IF NOT EXISTS max_uses INT NOT NULL DEFAULT 1")
+                await conn.execute("ALTER TABLE kachi_redeem_codes_v2 ADD COLUMN IF NOT EXISTS used_count INT NOT NULL DEFAULT 0")
+                await conn.execute("ALTER TABLE kachi_redeem_codes_v2 ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0")
+                await conn.execute("ALTER TABLE kachi_redeem_codes_v2 ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0")
                 inserted = await conn.fetchval(
-                    "INSERT INTO redeem_codes(code,amount,max_uses,created_by,created_at) "
+                    "INSERT INTO kachi_redeem_codes_v2(code,amount,max_uses,created_by,created_at) "
                     "VALUES($1,$2,$3,$4,$5) ON CONFLICT(code) DO NOTHING RETURNING code",
                     code, amount, limit, user.id, int(time.time())
                 )
@@ -2534,21 +2534,21 @@ async def redeem_code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await register_user_group(user, update.effective_chat, context)
         async with db_pool.acquire() as conn:
             async with conn.transaction():
-                row = await conn.fetchrow("SELECT amount,max_uses,used_count FROM redeem_codes WHERE code=$1 FOR UPDATE", code)
+                row = await conn.fetchrow("SELECT amount,max_uses,used_count FROM kachi_redeem_codes_v2 WHERE code=$1 FOR UPDATE", code)
                 if not row:
                     return await _safe_reply_text(msg, "❌ Code မှားနေပါတယ် သို့မဟုတ် မရှိတော့ပါ။")
-                already = await conn.fetchval("SELECT 1 FROM redeem_code_uses WHERE code=$1 AND user_id=$2", code, user.id)
+                already = await conn.fetchval("SELECT 1 FROM kachi_redeem_code_uses_v2 WHERE code=$1 AND user_id=$2", code, user.id)
                 if already:
                     return await _safe_reply_text(msg, "⚠️ ဒီ Code ကို လှယ်ပြီးသားပါ။")
                 if row['used_count'] >= row['max_uses']:
                     return await _safe_reply_text(msg, "❌ Limit ပြည့်သွားပါပြီ။")
                 inserted = await conn.fetchval(
-                    "INSERT INTO redeem_code_uses(code,user_id,redeemed_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING user_id",
+                    "INSERT INTO kachi_redeem_code_uses_v2(code,user_id,redeemed_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING user_id",
                     code, user.id, int(time.time())
                 )
                 if not inserted:
                     return await _safe_reply_text(msg, "⚠️ ဒီ Code ကို လှယ်ပြီးသားပါ။")
-                await conn.execute("UPDATE redeem_codes SET used_count=used_count+1 WHERE code=$1", code)
+                await conn.execute("UPDATE kachi_redeem_codes_v2 SET used_count=used_count+1 WHERE code=$1", code)
                 await conn.execute("UPDATE users SET coins=COALESCE(coins,0)+$1 WHERE user_id=$2", row['amount'], user.id)
         return await _safe_reply_text(msg, f"🎉 Code လှယ်ပြီးပါပြီ။\n💰 +{row['amount']:,} Kachi 🩸")
     except Exception as e:
@@ -5070,11 +5070,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 chat=await context.bot.get_chat(target_ref)
                 key=f"{uuid.uuid4()}"
-                keyboard=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(f"Like❤ {int(totals['likes'] or 0)}",callback_data=f"sendreact_{key}_like",style="primary"),
-                    InlineKeyboardButton(f"HaHa😂 {int(totals['haha'] or 0)}",callback_data=f"sendreact_{key}_haha",style="primary"),
-                    InlineKeyboardButton(f"Chee💩 {int(totals['chee'] or 0)}",callback_data=f"sendreact_{key}_chee",style="primary")
-                ]])
+                keyboard=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"Like❤ {int(totals['likes'] or 0)}",callback_data=f"sendreact_{key}_like",style="primary"),
+                     InlineKeyboardButton(f"HaHa😂 {int(totals['haha'] or 0)}",callback_data=f"sendreact_{key}_haha",style="primary")],
+                    [InlineKeyboardButton(f"Chee💩 {int(totals['chee'] or 0)}",callback_data=f"sendreact_{key}_chee",style="primary")]
+                ])
                 sent_message=await context.bot.send_message(chat_id=chat.id,text=f"🦋 Message \n\n{msg.text}",reply_markup=keyboard)
                 async with db_pool.acquire() as conn:
                     await conn.execute(
@@ -5937,11 +5937,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
             if not message_exists:
                 return await query.answer("ဒီ Send message ကို ရှာမတွေ့ပါ။", show_alert=True)
-            markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"Like❤ {int(totals['total_likes'] or 0)}",callback_data=f"sendreact_{key}_like",style="primary"),
-                InlineKeyboardButton(f"HaHa😂 {int(totals['total_haha'] or 0)}",callback_data=f"sendreact_{key}_haha",style="primary"),
-                InlineKeyboardButton(f"Chee💩 {int(totals['total_chee'] or 0)}",callback_data=f"sendreact_{key}_chee",style="primary")
-            ]])
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"Like❤ {int(totals['total_likes'] or 0)}",callback_data=f"sendreact_{key}_like",style="primary"),
+                 InlineKeyboardButton(f"HaHa😂 {int(totals['total_haha'] or 0)}",callback_data=f"sendreact_{key}_haha",style="primary")],
+                [InlineKeyboardButton(f"Chee💩 {int(totals['total_chee'] or 0)}",callback_data=f"sendreact_{key}_chee",style="primary")]
+            ])
             await query.answer("Reaction တင်ပြီးပါပြီ။")
             try:
                 await query.edit_message_reply_markup(reply_markup=markup)
