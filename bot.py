@@ -1422,8 +1422,9 @@ async def send_character_spawn(context, chat_id, card, reply_to_message_id=None,
             return None
 
     rarity_emoji = get_rarity_emoji(card.get('rarity') or 'Ten')
-    caption = (f"{rarity_emoji} A Kachi Character Has Spawned in❄ The Chat\n\n"
-               "📯 Fast to Catch 🐌 /mm name")
+    caption = (f"{rarity_emoji} Kachi Character Has Spawned In The Chat🍁\n\n"
+               "ғᴀsᴛ ᴛᴏ ᴄᴀᴛᴄʜ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ғᴏʀ ʏᴏᴜʀ ʜᴀʀᴇᴍ\n"
+               "ᴜsᴇ /mm ɴᴀᴍᴇ")
     try:
         if card['type'] == 'photo':
             msg = await context.bot.send_photo(chat_id, card['file_id'], caption=caption, parse_mode='HTML')
@@ -3333,18 +3334,20 @@ async def kfav_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not card or not owned:
         return await _safe_reply_text(msg, "❌ ဒီကဒ်ကို မပိုင်ဆိုင်ထားပါ။")
     caption = (
-        f"🎴 {html.escape(card['name'] or 'Unknown')}\n"
-        f"🆔 <code>{html.escape(card['card_id'])}</code>\n"
-        f"🌟 {html.escape(get_rarity_display(card['rarity'] or 'Ten'))}\n"
-        f"📚 {html.escape(card['collection'] or 'N/A')}\n"
-        f"👤 Owner: {get_mention(user.id, user.first_name)}\n"
-        f"📦 Owned: {owned}x"
+        f"Character name - {html.escape(card['name'] or 'Unknown')}\n"
+        f"ID - <code>{html.escape(card['card_id'])}</code>\n"
+        f"Rarity - {html.escape(get_rarity_display(card['rarity'] or 'Ten'))}\n"
+        f"Collection - {html.escape(card['collection'] or 'N/A')}\n\n"
+        f"Owner - {get_mention(user.id, user.first_name)}\n"
+        f"Owned - {owned}x"
     )
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Cancel", callback_data=f"kfav_cancel_{user.id}", style="danger"),
-        InlineKeyboardButton("Favorite", callback_data=f"kfav_set_{user.id}_{card_id}", style="success"),
-        InlineKeyboardButton("Set Words", callback_data=f"kfav_words_{user.id}_{card_id}", style="primary")
-    ]])
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Cancel", callback_data=f"kfav_cancel_{user.id}", style="danger"),
+            InlineKeyboardButton("Favorite", callback_data=f"kfav_set_{user.id}_{card_id}", style="success")
+        ],
+        [InlineKeyboardButton("Set Words", callback_data=f"kfav_words_{user.id}_{card_id}", style="primary")]
+    ])
     try:
         if card['type'] == 'photo':
             await _safe_reply_photo(msg, photo=card['file_id'], caption=caption, parse_mode="HTML", reply_markup=keyboard)
@@ -3747,15 +3750,11 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     total_pages = (total_cards + per_page - 1) // per_page if total_cards > 0 else 1
     page = max(0, min(page, total_pages - 1))
 
-    mode_title = f" [{get_rarity_display(rarity_mode)} Mode]" if rarity_mode else ""
-    text_header = f"""❀ NAME - {get_mention(target_id, display_name)}
-❀ Global No - #{global_rank}
-
-HAREM PAGE{mode_title} ({page + 1}/{total_pages})
-🎴 Total Cards: {all_owned_total}"""
+    text_header = (f"🎨Character Collector' {get_mention(target_id, display_name)}\n"
+                   f"🌍Global ({global_rank}) Harem page({page + 1}/{total_pages})")
 
     if not user_card_rows:
-        full_text = f"{text_header}\n\nCollection\n<i>No cards found.</i>"
+        full_text = f"{text_header}\n\n🍀Collection\n<i>No cards found.</i>"
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(f"Harem❄ ({total_owned_sum})", switch_inline_query_current_chat=f"harem.{target_id}", style="success")
@@ -3792,17 +3791,22 @@ HAREM PAGE{mode_title} ({page + 1}/{total_pages})
             collections_dict[col] = []
         collections_dict[col].append(c)
 
-    content_blocks = ["Collection"]
+    content_blocks = ["🍀Collection"]
     for col_name, cards_in_col in collections_dict.items():
+        clean_col_name = re.sub(r"^🎞\s*", "", col_name).strip()
+        clean_col_name = re.sub(r"\s+\[", "[", clean_col_name)
         content_blocks.append("")
-        content_blocks.append(f"🍀 {col_name}\n━━━━━━━━━━━━━━━━━━")
+        content_blocks.append(f"🍀{html.escape(clean_col_name)}\n------------------------------------------")
         for c in cards_in_col:
             r_emoji = get_rarity_emoji(c.get('rarity'))
-            count_str = f" ({c['amount']}x)" if c['amount'] > 1 else " (1x)"
-            content_blocks.append(f"{c['card_id']} | {r_emoji} | {c['name']}{count_str}")
+            count_str = f"({c['amount']}x)" if c['amount'] > 1 else "(1x)"
+            row_text = f"{html.escape(str(c['card_id']))}|{r_emoji}|{html.escape(c['name'] or '')}{count_str}"
+            content_blocks.append(f"<blockquote>{row_text}</blockquote>")
 
     cards_info = "\n".join(content_blocks)
-    full_text = f"{text_header}\n\n{cards_info}"
+    full_text = (f"🎨Character Collector' {get_mention(target_id, display_name)}\n"
+                 f"🌍Global ({global_rank}) Harem page({page + 1}/{total_pages})\n\n"
+                 f"{cards_info}")
 
     keyboard_rows = []
     if total_pages > 1:
@@ -5476,7 +5480,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "ON CONFLICT(user_id) DO UPDATE SET card_id=EXCLUDED.card_id",
                     owner_id, card_id
                 )
-            return await query.answer("Favorite Card သတ်မှတ်ပြီးပါပြီ။")
+                card_row = await conn.fetchrow(
+                    "SELECT name,card_id,rarity,collection FROM cards WHERE card_id=$1", card_id
+                )
+                owned_amount = await conn.fetchval(
+                    "SELECT amount FROM user_cards WHERE user_id=$1 AND card_id=$2", owner_id, card_id
+                )
+            if card_row and query.message:
+                owner_name = query.from_user.first_name
+                updated_caption = (
+                    f"Character name - {html.escape(card_row['name'] or 'Unknown')}\n"
+                    f"ID - <code>{html.escape(str(card_row['card_id']))}</code>\n"
+                    f"Rarity - {html.escape(get_rarity_display(card_row['rarity'] or 'Ten'))}\n"
+                    f"Collection - {html.escape(card_row['collection'] or 'N/A')}\n\n"
+                    f"Owner - {get_mention(owner_id, owner_name)}\n"
+                    f"Owned - {owned_amount or 0}x\n\n"
+                    "❤️ Favorite ထားပြီးပါပြီ။"
+                )
+                try:
+                    if query.message.photo or query.message.video:
+                        await query.edit_message_caption(caption=updated_caption, parse_mode="HTML", reply_markup=None)
+                    else:
+                        await query.edit_message_text(updated_caption, parse_mode="HTML", reply_markup=None)
+                except Exception as edit_error:
+                    print(f"Could not update favorite card message: {type(edit_error).__name__}: {edit_error}")
+            return await query.answer("Favorite ထားပြီးပါပြီ။")
         if action == "words":
             pending_favorite_words[owner_id] = {"stage": "trigger", "card_id": card_id}
             await query.answer()
