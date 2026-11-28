@@ -2458,42 +2458,85 @@ async def daily_top_settlement_worker(app):
 
 
 @restricted_command
-async def todaytop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_force_join(update, context):
+async def dailytop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show today's top 10 successful automatic card catchers and reward tiers."""
+    msg = update.effective_message
+    if msg is None:
         return
-    today = myanmar_today()
-    yesterday = today - datetime.timedelta(days=1)
+
     try:
-        await settle_daily_top(yesterday)
+        if not await check_force_join(update, context):
+            return
+
+        if db_pool is None:
+            return await _safe_reply_text(msg, "❌ Daily Top ကို ယခုအသုံးမပြုနိုင်သေးပါ။ Database ချိတ်ဆက်မှု မရသေးပါ။")
+
+        today = myanmar_today()
+        yesterday = today - datetime.timedelta(days=1)
+
+        # Catch up yesterday's reward settlement if the bot restarted around midnight.
+        try:
+            await settle_daily_top(yesterday)
+        except Exception as e:
+            print(f"Daily top catch-up failed: {type(e).__name__}: {e}")
+
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT u.user_id, COALESCE(u.name, 'Catcher') AS name,
+                          SUM(d.count)::BIGINT AS total_catches
+                   FROM daily_spawn_claims d JOIN users u ON u.user_id=d.user_id
+                   WHERE d.claim_date=$1 AND d.count>0
+                   GROUP BY u.user_id,u.name
+                   ORDER BY total_catches DESC,d.user_id ASC LIMIT 10""",
+                today
+            )
+            paid_rows = await conn.fetch(
+                "SELECT user_id, rank, reward FROM daily_spawn_rewards WHERE claim_date=$1 ORDER BY rank",
+                yesterday
+            )
+
+        medals = ["🥇", "🥈", "🥉"]
+        reward_values = [20000, 15000, 10000, 5000, 5000, 5000, 5000, 5000, 5000, 5000]
+        lines = [
+            "🏆 DAILY TOP 10",
+            f"📅 {today.strftime('%d %b %Y')}",
+            "",
+            "Daily Catchers",
+            "━━━━━━━━━━━━━━━━━━"
+        ]
+        if rows:
+            for rank, row in enumerate(rows, 1):
+                prefix = medals[rank - 1] if rank <= 3 else f"{rank}."
+                lines.append(
+                    f"{prefix} {get_mention(row['user_id'], row['name'])} — "
+                    f"{row['total_catches']} catches | {reward_values[rank - 1]:,} Kachi"
+                )
+        else:
+            lines.append("ဒီနေ့ ကတ်ကောက်ထားသူ မရှိသေးပါ။")
+
+        lines.extend([
+            "",
+            "🎁 Daily Rewards",
+            "🥇 No.1 — 20,000 Kachi",
+            "🥈 No.2 — 15,000 Kachi",
+            "🥉 No.3 — 10,000 Kachi",
+            "No.4–10 — 5,000 Kachi each",
+            "",
+            "ဆုငွေကို မြန်မာစံတော်ချိန် ည ၁၂ နာရီမှာ အလိုအလျောက် ပေးချေပါမယ်။"
+        ])
+        if paid_rows:
+            lines.extend(["", "✅ မနေ့က Daily ဆု ပေးချေပြီးပါပြီ။"])
+
+        return await _safe_reply_text(msg, "\\n".join(lines), parse_mode="HTML")
     except Exception as e:
-        print(f"Daily top catch-up failed: {type(e).__name__}: {e}")
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT u.user_id, COALESCE(u.name, 'Catcher') AS name,
-                      SUM(d.count)::BIGINT AS total_catches
-               FROM daily_spawn_claims d JOIN users u ON u.user_id=d.user_id
-               WHERE d.claim_date=$1 AND d.count>0
-               GROUP BY u.user_id,u.name
-               ORDER BY total_catches DESC,d.user_id ASC LIMIT 10""",
-            today
-        )
-        paid_rows = await conn.fetch(
-            "SELECT user_id, rank, reward FROM daily_spawn_rewards WHERE claim_date=$1 ORDER BY rank",
-            yesterday
-        )
-    medals = ["🥇", "🥈", "🥉"]
-    reward_values = [20000, 15000, 10000, 5000, 5000, 5000, 5000, 5000, 5000, 5000]
-    lines = ["🏆 TODAY TOP 10", f"📅 {today.strftime('%d %b %Y')}", "", "Daily Catchers", "━━━━━━━━━━━━━━━━━━"]
-    if rows:
-        for rank, row in enumerate(rows, 1):
-            prefix = medals[rank-1] if rank <= 3 else f"{rank}."
-            lines.append(f"{prefix} {get_mention(row['user_id'], row['name'])} — {row['total_catches']} catches | {reward_values[rank-1]:,} Kachi")
-    else:
-        lines.append("ဒီနေ့ ကတ်ကောက်ထားသူ မရှိသေးပါ။")
-    lines.extend(["", "🎁 Daily Rewards", "🥇 No.1 — 20,000 Kachi", "🥈 No.2 — 15,000 Kachi", "🥉 No.3 — 10,000 Kachi", "No.4–10 — 5,000 Kachi each", "", "ဆုငွေကို မြန်မာစံတော်ချိန် ည ၁၂ နာရီမှာ အလိုအလျောက် ပေးချေပါမယ်။"])
-    if paid_rows:
-        lines.extend(["", "✅ မနေ့က Daily ဆု ပေးချေပြီးပါပြီ။"])
-    return await _safe_reply_text(update.effective_message, "\n".join(lines), parse_mode="HTML")
+        print(f"/dailytop failed: {type(e).__name__}: {e}")
+        try:
+            return await _safe_reply_text(
+                msg,
+                "❌ Daily Top စာရင်းကို ဖတ်မရပါ။ ခဏနေမှ ထပ်စမ်းကြည့်ပါ။"
+            )
+        except Exception as send_error:
+            print(f"/dailytop error reply failed: {type(send_error).__name__}: {send_error}")
 
 
 async def render_tdc_page(bot, chat_id, claim_date, page):
@@ -6850,7 +6893,7 @@ def main():
     app.add_handler(CommandHandler("rngift", rngift_cmd))
     app.add_handler(CommandHandler("card", card_detail_cmd))
     app.add_handler(CommandHandler("ktop", ktop_cmd))
-    app.add_handler(CommandHandler("todaytop", todaytop_cmd))
+    app.add_handler(CommandHandler("dailytop", dailytop_cmd))
     app.add_handler(CommandHandler("kgtop", kgtop_cmd))
     app.add_handler(CommandHandler("ksearch", ksearch_cmd))
 
