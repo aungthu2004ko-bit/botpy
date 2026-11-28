@@ -363,6 +363,20 @@ async def _init_db_once():
                 PRIMARY KEY (claim_date, user_id),
                 UNIQUE (claim_date, rank)
             );
+            CREATE TABLE IF NOT EXISTS redeem_codes (
+                code TEXT PRIMARY KEY,
+                amount BIGINT NOT NULL CHECK (amount > 0),
+                max_uses INT NOT NULL CHECK (max_uses > 0),
+                used_count INT NOT NULL DEFAULT 0,
+                created_by BIGINT NOT NULL,
+                created_at BIGINT NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS redeem_code_uses (
+                code TEXT NOT NULL REFERENCES redeem_codes(code) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL,
+                redeemed_at BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (code, user_id)
+            );
             CREATE TABLE IF NOT EXISTS send_message_likes (
                 message_key TEXT PRIMARY KEY,
                 total_likes BIGINT NOT NULL DEFAULT 0,
@@ -1089,6 +1103,26 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await _safe_reply_text(msg, caption_text, parse_mode="HTML", reply_markup=keyboard)
 
+def build_start_screen_text(user):
+    return f"""👋 Hello {get_mention(user.id, user.first_name)}!
+
+🌺 Welcome to Kachi Card GAME BOT!
+
+📌 How to Use / အသုံးပြုနည်း
+
+မြန်မာ
+- Bot ကို Group ထဲသို့ ထည့်ပါ။
+- Group ထဲတွင် စာများပေးပို့ပါ။ သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက Character Card အလိုအလျောက် ကျလာပါမည်။
+- ကတ်ကျလာပါက ကတ်ကို Reply ပြန်ပြီး <code>.k</code> ရိုက်ပါ။ Character Name ပေါ်လာပါမည်။ ထို့နောက် <code>/mm [name]</code> ဖြင့် ကတ်ကိုဖမ်းပါ။
+- Leaderboard ကြည့်ရန် /ktop ကို အသုံးပြုပါ။
+
+English
+- Add the bot to your group.
+- Send messages in the group. A Character Card will drop automatically when the message limit is reached.
+- When a card drops, reply to that card and type <code>.k</code> to reveal the character name. Then catch it using <code>/mm [name]</code>.
+- Use /ktop to view the leaderboard."""
+
+
 @restricted_command
 
 @restricted_command
@@ -1170,23 +1204,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "ဥပမာ — 5000")
 
     bot_info = await context.bot.get_me()
-    text = f"""👋 Hello {get_mention(user.id, user.first_name)}!
-
-🌺 Welcome to Kachi Card GAME BOT!
-
-📌 How to Use / အသုံးပြုနည်း
-
-မြန်မာ
-- Bot ကို Group ထဲသို့ ထည့်ပါ။
-- Group ထဲတွင် စာများပေးပို့ပါ။ သတ်မှတ်ထားသော စာအရေအတွက်ပြည့်ပါက Character Card အလိုအလျောက် ကျလာပါမည်။
-- ကတ်ကျလာပါက ကတ်ကို Reply ပြန်ပြီး <code>.k</code> ရိုက်ပါ။ Character Name ပေါ်လာပါမည်။ ထို့နောက် <code>/mm [name]</code> ဖြင့် ကတ်ကိုဖမ်းပါ။
-- Leaderboard ကြည့်ရန် /ktop ကို အသုံးပြုပါ။
-
-English
-- Add the bot to your group.
-- Send messages in the group. A Character Card will drop automatically when the message limit is reached.
-- When a card drops, reply to that card and type <code>.k</code> to reveal the character name. Then catch it using <code>/mm [name]</code>.
-- Use /ktop to view the leaderboard."""
+    text = build_start_screen_text(user)
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -1612,10 +1630,10 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             'winner_name': local.get('winner_name'), 'ended': local.get('ended', False)
                         }
                 if not drop:
-                    return await _safe_reply_text(msg, "❄ No active character spawn right now.")
+                    return
                 if drop['winner_id'] is not None:
                     winner = get_mention(drop['winner_id'], drop['winner_name'] or 'Winner')
-                    return await _safe_reply_text(msg, f"Too Late 😭 {winner} got it first. Try next time ❄", parse_mode='HTML')
+                    return await _safe_reply_text(msg, winner, parse_mode='HTML')
                 if drop['ended'] or float(drop['expires_at']) <= now:
                     return
 
@@ -2406,6 +2424,71 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "\n".join(lines)
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML")
 
+@restricted_command
+async def create_redeem_code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg, user = update.effective_message, update.effective_user
+    if not user or user.id != ADMIN_ID:
+        return await _safe_reply_text(msg, "❌ ဒီ Command ကို Bot Admin တစ်ယောက်တည်းသာ အသုံးပြုနိုင်ပါတယ်။")
+    if len(context.args) != 3:
+        return await _safe_reply_text(msg, "အသုံးပြုပုံ: /code amount code user_limit\nဥပမာ: /code 3000 CODJE 3")
+    try:
+        amount = int(context.args[0])
+        code = context.args[1].strip().upper()
+        limit = int(context.args[2])
+        if amount <= 0 or limit <= 0 or len(code) > 64 or not re.fullmatch(r"[A-Z0-9_-]+", code):
+            raise ValueError
+    except (TypeError, ValueError):
+        return await _safe_reply_text(msg, "❌ Amount, Code သို့မဟုတ် User Limit မှားနေပါတယ်။")
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO redeem_codes(code,amount,max_uses,created_by,created_at) VALUES($1,$2,$3,$4,$5)",
+                code, amount, limit, user.id, int(time.time())
+            )
+        return await _safe_reply_text(msg, f"✅ Redeem Code ဖန်တီးပြီးပါပြီ။\nCode: <code>{html.escape(code)}</code>\nAmount: {amount:,} Kachi\nLimit: {limit} users", parse_mode="HTML")
+    except asyncpg.UniqueViolationError:
+        return await _safe_reply_text(msg, "❌ ဒီ Code ကို အသုံးပြုပြီးသားပါ။ နောက် Code အသစ်သုံးပါ။")
+    except Exception as e:
+        print(f"/code failed: {type(e).__name__}: {e}")
+        return await _safe_reply_text(msg, "❌ Code ဖန်တီးမရပါ။ ခဏနေမှ ထပ်စမ်းပါ။")
+
+
+@restricted_command
+async def redeem_code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg, user = update.effective_message, update.effective_user
+    if not user:
+        return
+    if len(context.args) != 1:
+        return await _safe_reply_text(msg, "အသုံးပြုပုံ: /kredeem code")
+    code = context.args[0].strip().upper()
+    if not code:
+        return await _safe_reply_text(msg, "❌ Code ထည့်ပေးပါ။")
+    try:
+        await register_user_group(user, update.effective_chat, context)
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("SELECT amount,max_uses,used_count FROM redeem_codes WHERE code=$1 FOR UPDATE", code)
+                if not row:
+                    return await _safe_reply_text(msg, "❌ Code မှားနေပါတယ် သို့မဟုတ် မရှိတော့ပါ။")
+                already = await conn.fetchval("SELECT 1 FROM redeem_code_uses WHERE code=$1 AND user_id=$2", code, user.id)
+                if already:
+                    return await _safe_reply_text(msg, "⚠️ ဒီ Code ကို လှယ်ပြီးသားပါ။")
+                if row['used_count'] >= row['max_uses']:
+                    return await _safe_reply_text(msg, "❌ Limit ပြည့်သွားပါပြီ။")
+                inserted = await conn.fetchval(
+                    "INSERT INTO redeem_code_uses(code,user_id,redeemed_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING user_id",
+                    code, user.id, int(time.time())
+                )
+                if not inserted:
+                    return await _safe_reply_text(msg, "⚠️ ဒီ Code ကို လှယ်ပြီးသားပါ။")
+                await conn.execute("UPDATE redeem_codes SET used_count=used_count+1 WHERE code=$1", code)
+                await conn.execute("UPDATE users SET coins=COALESCE(coins,0)+$1 WHERE user_id=$2", row['amount'], user.id)
+        return await _safe_reply_text(msg, f"🎉 Code လှယ်ပြီးပါပြီ။\n💰 +{row['amount']:,} Kachi 🩸")
+    except Exception as e:
+        print(f"/kredeem failed: {type(e).__name__}: {e}")
+        return await _safe_reply_text(msg, "❌ Code လှယ်မရပါ။ ခဏနေမှ ထပ်စမ်းပါ။")
+
+
 def myanmar_today():
     return (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6, minutes=30)).date()
 
@@ -2459,84 +2542,42 @@ async def daily_top_settlement_worker(app):
 
 @restricted_command
 async def dailytop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show today's top 10 successful automatic card catchers and reward tiers."""
+    """Show the top 10 users who successfully caught automatic card drops today."""
     msg = update.effective_message
     if msg is None:
         return
-
+    if not await check_force_join(update, context):
+        return
+    if db_pool is None:
+        return await _safe_reply_text(msg, "❌ Database ချိတ်ဆက်မှု မရသေးပါ။")
+    today = myanmar_today()
     try:
-        if not await check_force_join(update, context):
-            return
-
-        if db_pool is None:
-            return await _safe_reply_text(msg, "❌ Daily Top ကို ယခုအသုံးမပြုနိုင်သေးပါ။ Database ချိတ်ဆက်မှု မရသေးပါ။")
-
-        today = myanmar_today()
-        yesterday = today - datetime.timedelta(days=1)
-
-        # Catch up yesterday's reward settlement if the bot restarted around midnight.
-        try:
-            await settle_daily_top(yesterday)
-        except Exception as e:
-            print(f"Daily top catch-up failed: {type(e).__name__}: {e}")
-
         async with db_pool.acquire() as conn:
+            # This table is incremented only after a valid /mm catch succeeds.
             rows = await conn.fetch(
-                """SELECT u.user_id, COALESCE(u.name, 'Catcher') AS name,
+                """SELECT d.user_id, COALESCE(u.name, 'Catcher') AS name,
                           SUM(d.count)::BIGINT AS total_catches
-                   FROM daily_spawn_claims d JOIN users u ON u.user_id=d.user_id
-                   WHERE d.claim_date=$1 AND d.count>0
-                   GROUP BY u.user_id,u.name
-                   ORDER BY total_catches DESC,d.user_id ASC LIMIT 10""",
+                   FROM daily_spawn_claims AS d
+                   LEFT JOIN users AS u ON u.user_id = d.user_id
+                   WHERE d.claim_date = $1 AND d.count > 0
+                   GROUP BY d.user_id, u.name
+                   ORDER BY SUM(d.count) DESC, d.user_id ASC
+                   LIMIT 10""",
                 today
             )
-            paid_rows = await conn.fetch(
-                "SELECT user_id, rank, reward FROM daily_spawn_rewards WHERE claim_date=$1 ORDER BY rank",
-                yesterday
-            )
-
+        lines = [f"🏆 DAILY TOP 10", f"📅 {today.strftime('%d %b %Y')}", "", "Daily Catchers", "━━━━━━━━━━━━━━━━━━"]
         medals = ["🥇", "🥈", "🥉"]
-        reward_values = [20000, 15000, 10000, 5000, 5000, 5000, 5000, 5000, 5000, 5000]
-        lines = [
-            "🏆 DAILY TOP 10",
-            f"📅 {today.strftime('%d %b %Y')}",
-            "",
-            "Daily Catchers",
-            "━━━━━━━━━━━━━━━━━━"
-        ]
         if rows:
             for rank, row in enumerate(rows, 1):
                 prefix = medals[rank - 1] if rank <= 3 else f"{rank}."
-                lines.append(
-                    f"{prefix} {get_mention(row['user_id'], row['name'])} — "
-                    f"{row['total_catches']} catches | {reward_values[rank - 1]:,} Kachi"
-                )
+                lines.append(f"{prefix} {get_mention(row['user_id'], row['name'])} — {row['total_catches']} catches")
         else:
             lines.append("ဒီနေ့ ကတ်ကောက်ထားသူ မရှိသေးပါ။")
-
-        lines.extend([
-            "",
-            "🎁 Daily Rewards",
-            "🥇 No.1 — 20,000 Kachi",
-            "🥈 No.2 — 15,000 Kachi",
-            "🥉 No.3 — 10,000 Kachi",
-            "No.4–10 — 5,000 Kachi each",
-            "",
-            "ဆုငွေကို မြန်မာစံတော်ချိန် ည ၁၂ နာရီမှာ အလိုအလျောက် ပေးချေပါမယ်။"
-        ])
-        if paid_rows:
-            lines.extend(["", "✅ မနေ့က Daily ဆု ပေးချေပြီးပါပြီ။"])
-
-        return await _safe_reply_text(msg, "\\n".join(lines), parse_mode="HTML")
+        lines.extend(["", "📌 အလိုအလျောက်ကျလာတဲ့ ကတ်ကို အောင်မြင်စွာ ကောက်ယူသူများသာ ပါဝင်ပါတယ်။", "/pre နဲ့ /kbox ကတ်တွေ မပါဝင်ပါ။"])
+        return await _safe_reply_text(msg, "\n".join(lines), parse_mode="HTML")
     except Exception as e:
         print(f"/dailytop failed: {type(e).__name__}: {e}")
-        try:
-            return await _safe_reply_text(
-                msg,
-                "❌ Daily Top စာရင်းကို ဖတ်မရပါ။ ခဏနေမှ ထပ်စမ်းကြည့်ပါ။"
-            )
-        except Exception as send_error:
-            print(f"/dailytop error reply failed: {type(send_error).__name__}: {send_error}")
+        return await _safe_reply_text(msg, "❌ Daily Top ကို ဖတ်မရပါ။ Database error ဖြစ်နေပါတယ်။")
 
 
 async def render_tdc_page(bot, chat_id, claim_date, page):
@@ -6420,15 +6461,7 @@ Reply to a user's message and use:
 
     if data == "menu_back":
         bot_info = await context.bot.get_me()
-        text = f"""👋 Hello {get_mention(user.id, user.first_name)}!
-
-🌺 Welcome to Kachi Card GAME BOT!
-
-📌 How to Use
-- Add the bot to your group.
-- Send messages in the group. Character Cards will drop automatically when the message limit is reached.
-- When a card drops, tap နာမည်ဖြေရန် and enter the character name.
-- Use /ktop to view the leaderboard."""
+        text = build_start_screen_text(user)
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("Help 📖", callback_data="menu_help", style="primary"),
@@ -6894,6 +6927,7 @@ def main():
     app.add_handler(CommandHandler("card", card_detail_cmd))
     app.add_handler(CommandHandler("ktop", ktop_cmd))
     app.add_handler(CommandHandler("dailytop", dailytop_cmd))
+    app.add_handler(CommandHandler("kredeem", redeem_code_cmd))
     app.add_handler(CommandHandler("kgtop", kgtop_cmd))
     app.add_handler(CommandHandler("ksearch", ksearch_cmd))
 
@@ -6909,6 +6943,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("kac", admin_coin_cmd))
+    app.add_handler(CommandHandler("code", create_redeem_code_cmd))
     app.add_handler(CommandHandler("k", reveal_spawn_name))
     app.add_handler(CommandHandler("addadmin", addadmin_cmd))
     app.add_handler(CommandHandler("got", got_card_cmd))
