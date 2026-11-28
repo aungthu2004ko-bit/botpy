@@ -1059,23 +1059,14 @@ async def pre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Harem❄", switch_inline_query_current_chat=f"harem.{user.id}", style="success")]
     ])
-    display_card = card
-    async with db_pool.acquire() as conn:
-        fav_display = await conn.fetchrow(
-            "SELECT c.type,c.file_id FROM user_favorite_cards f JOIN cards c ON c.card_id=f.card_id WHERE f.user_id=$1",
-            user.id
-        )
-    if fav_display:
-        display_card = fav_display
-
-    if display_card['type'] == 'photo':
+    if card['type'] == 'photo':
         try:
-            await _safe_reply_photo(msg, photo=display_card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
+            await _safe_reply_photo(msg, photo=card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
         except Exception:
             await _safe_reply_text(msg, caption_text, parse_mode="HTML", reply_markup=keyboard)
     else:
         try:
-            await _safe_reply_video(msg, video=display_card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
+            await _safe_reply_video(msg, video=card['file_id'], caption=caption_text, parse_mode="HTML", reply_markup=keyboard)
         except Exception:
             await _safe_reply_text(msg, caption_text, parse_mode="HTML", reply_markup=keyboard)
 
@@ -5015,23 +5006,15 @@ Collection : {col_name}
 🔍 Check: /kc
 📖 Details: /card {card['card_id']}"""
 
-        display_card = card
-        async with db_pool.acquire() as conn:
-            fav_display = await conn.fetchrow(
-                "SELECT c.type,c.file_id FROM user_favorite_cards f JOIN cards c ON c.card_id=f.card_id WHERE f.user_id=$1",
-                user_id
-            )
-        if fav_display:
-            display_card = fav_display
         try:
-            if display_card['type'] == 'photo':
+            if card['type'] == 'photo':
                 await bot.send_photo(
-                    chat_id=chat_id, photo=display_card['file_id'],
+                    chat_id=chat_id, photo=card['file_id'],
                     caption=result_caption, parse_mode="HTML"
                 )
             else:
                 await bot.send_video(
-                    chat_id=chat_id, video=display_card['file_id'],
+                    chat_id=chat_id, video=card['file_id'],
                     caption=result_caption, parse_mode="HTML"
                 )
         except Exception as send_error:
