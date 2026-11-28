@@ -351,6 +351,18 @@ async def _init_db_once():
                 count INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, claim_date)
             );
+            CREATE TABLE IF NOT EXISTS daily_spawn_settlements (
+                claim_date DATE PRIMARY KEY,
+                settled_at BIGINT NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS daily_spawn_rewards (
+                claim_date DATE NOT NULL,
+                user_id BIGINT NOT NULL,
+                rank INT NOT NULL,
+                reward BIGINT NOT NULL,
+                PRIMARY KEY (claim_date, user_id),
+                UNIQUE (claim_date, rank)
+            );
             CREATE TABLE IF NOT EXISTS send_message_likes (
                 message_key TEXT PRIMARY KEY,
                 total_likes BIGINT NOT NULL DEFAULT 0,
@@ -1257,13 +1269,13 @@ async def kdaily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
 
-            new_coins = current_coins + 1000
+            new_coins = current_coins + 2000
             await conn.execute("UPDATE users SET coins = $1, last_kdaily = $2 WHERE user_id = $3", new_coins, now, user.id)
 
     await _safe_reply_text(msg, 
         f"🎁 Daily Kachi Claimed Successfully!\n\n"
         f"👤 User: {get_mention(user.id, display_name)}\n"
-        f"💎 Reward: +1000 Kachi 🩸\n"
+        f"💎 Reward: +2000 Kachi 🩸\n"
         f"💰 Total Balance: {new_coins} Kachi\n\n"
         f"<i>ကျေးဇူးတင်ပါတယ်! မနက်ဖြန်လည်း ထပ်မံလာရောက် ထုတ်ယူနိုင်ပါပြီ ✨</i>",
         parse_mode="HTML"
@@ -1678,7 +1690,11 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
                f"❀Cᴀʀᴅ - {_plain_text(html.escape(card['name']))}\n         ✿ {card['card_id']}\n"
                f"❀RARITY - {rarity}\n      ✿ {collection}")
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f'Harem❄ ({owned_amount}x)', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
+    async with db_pool.acquire() as conn:
+        harem_total = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM user_cards WHERE user_id=$1", user.id
+        ) or 0
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f'Harem❄ ({harem_total})', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
     try:
         if card['type'] == 'photo':
             await context.bot.send_photo(
@@ -2389,6 +2405,96 @@ async def kg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append("▰▱▰▱▰▱▰▱▰▱▰")
     text = "\n".join(lines)
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML")
+
+def myanmar_today():
+    return (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6, minutes=30)).date()
+
+
+async def settle_daily_top(claim_date):
+    """Pay the daily top 10 once for a completed Myanmar calendar day."""
+    rewards = [20000, 15000, 10000, 5000, 5000, 5000, 5000, 5000, 5000, 5000]
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            claimed = await conn.fetchval(
+                "INSERT INTO daily_spawn_settlements(claim_date, settled_at) VALUES($1,$2) "
+                "ON CONFLICT(claim_date) DO NOTHING RETURNING claim_date",
+                claim_date, int(time.time())
+            )
+            if not claimed:
+                return False
+            leaders = await conn.fetch(
+                """SELECT d.user_id, COALESCE(u.name, 'Catcher') AS name,
+                          SUM(d.count)::BIGINT AS total_catches
+                   FROM daily_spawn_claims d JOIN users u ON u.user_id=d.user_id
+                   WHERE d.claim_date=$1 AND d.count>0
+                   GROUP BY d.user_id,u.name
+                   ORDER BY total_catches DESC,d.user_id ASC LIMIT 10""",
+                claim_date
+            )
+            for rank, row in enumerate(leaders, 1):
+                reward = rewards[rank - 1]
+                await conn.execute(
+                    "INSERT INTO daily_spawn_rewards(claim_date,user_id,rank,reward) VALUES($1,$2,$3,$4) "
+                    "ON CONFLICT(claim_date,user_id) DO NOTHING",
+                    claim_date, row['user_id'], rank, reward
+                )
+                await conn.execute("UPDATE users SET coins=COALESCE(coins,0)+$1 WHERE user_id=$2", reward, row['user_id'])
+    return True
+
+
+async def daily_top_settlement_worker(app):
+    """Settle yesterday at Myanmar midnight, and catch up after a restart."""
+    while True:
+        today = myanmar_today()
+        yesterday = today - datetime.timedelta(days=1)
+        try:
+            await settle_daily_top(yesterday)
+        except Exception as e:
+            print(f"Daily top settlement failed for {yesterday}: {type(e).__name__}: {e}")
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        next_midnight_utc = datetime.datetime.combine(today + datetime.timedelta(days=1), datetime.time.min, tzinfo=datetime.timezone.utc) - datetime.timedelta(hours=6, minutes=30)
+        delay = max(1, (next_midnight_utc - now_utc).total_seconds())
+        await asyncio.sleep(delay + 1)
+
+
+@restricted_command
+async def todaytop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_force_join(update, context):
+        return
+    today = myanmar_today()
+    yesterday = today - datetime.timedelta(days=1)
+    try:
+        await settle_daily_top(yesterday)
+    except Exception as e:
+        print(f"Daily top catch-up failed: {type(e).__name__}: {e}")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT u.user_id, COALESCE(u.name, 'Catcher') AS name,
+                      SUM(d.count)::BIGINT AS total_catches
+               FROM daily_spawn_claims d JOIN users u ON u.user_id=d.user_id
+               WHERE d.claim_date=$1 AND d.count>0
+               GROUP BY u.user_id,u.name
+               ORDER BY total_catches DESC,d.user_id ASC LIMIT 10""",
+            today
+        )
+        paid_rows = await conn.fetch(
+            "SELECT user_id, rank, reward FROM daily_spawn_rewards WHERE claim_date=$1 ORDER BY rank",
+            yesterday
+        )
+    medals = ["🥇", "🥈", "🥉"]
+    reward_values = [20000, 15000, 10000, 5000, 5000, 5000, 5000, 5000, 5000, 5000]
+    lines = ["🏆 TODAY TOP 10", f"📅 {today.strftime('%d %b %Y')}", "", "Daily Catchers", "━━━━━━━━━━━━━━━━━━"]
+    if rows:
+        for rank, row in enumerate(rows, 1):
+            prefix = medals[rank-1] if rank <= 3 else f"{rank}."
+            lines.append(f"{prefix} {get_mention(row['user_id'], row['name'])} — {row['total_catches']} catches | {reward_values[rank-1]:,} Kachi")
+    else:
+        lines.append("ဒီနေ့ ကတ်ကောက်ထားသူ မရှိသေးပါ။")
+    lines.extend(["", "🎁 Daily Rewards", "🥇 No.1 — 20,000 Kachi", "🥈 No.2 — 15,000 Kachi", "🥉 No.3 — 10,000 Kachi", "No.4–10 — 5,000 Kachi each", "", "ဆုငွေကို မြန်မာစံတော်ချိန် ည ၁၂ နာရီမှာ အလိုအလျောက် ပေးချေပါမယ်။"])
+    if paid_rows:
+        lines.extend(["", "✅ မနေ့က Daily ဆု ပေးချေပြီးပါပြီ။"])
+    return await _safe_reply_text(update.effective_message, "\n".join(lines), parse_mode="HTML")
+
 
 async def render_tdc_page(bot, chat_id, claim_date, page):
     async with db_pool.acquire() as conn:
@@ -3298,6 +3404,35 @@ async def del_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _safe_reply_text(update.effective_message, f"✅ Card ID <code>{target_card_id}</code> ({card_name}) deleted successfully.", parse_mode="HTML")
 
 @restricted_command
+async def edit_card_rarity_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return await _safe_reply_text(update.effective_message, "❌ ဒီ Command ကို Bot Admin ပဲ အသုံးပြုနိုင်ပါတယ်။")
+    if not context.args:
+        return await _safe_reply_text(update.effective_message, "အသုံးပြုပုံ — /edit [Card ID]")
+    card_id = context.args[0].strip()
+    async with db_pool.acquire() as conn:
+        card = await conn.fetchrow("SELECT card_id,name,type,rarity FROM cards WHERE card_id=$1", card_id)
+    if not card:
+        return await _safe_reply_text(update.effective_message, f"❌ Card ID {html.escape(card_id)} မတွေ့ပါ။")
+    rarities = [
+        ("Beyond", "♠"), ("Birthday Special", "🎀"), ("Raiden", "📓"),
+        ("Kryora", "🦠"), ("Yugen", "🎐"), ("Shinsei", "🧬"),
+        ("Kiwami", "🪞"), ("Kami", "✨"), ("Hoshi", "⚜️"), ("Ten", "💮")
+    ]
+    buttons = []
+    row = []
+    for rarity, emoji in rarities:
+        row.append(InlineKeyboardButton(f"{emoji} {rarity}", callback_data=f"editrarity_{card_id}_{rarity}", style="primary"))
+        if len(row) == 2:
+            buttons.append(row); row=[]
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=f"editraritycancel_{card_id}", style="danger")])
+    return await _safe_reply_text(update.effective_message,
+        f"🃏 Card: {html.escape(card['name'] or 'Unknown')}\nID: <code>{html.escape(card_id)}</code>\nCurrent Rarity: {html.escape(get_rarity_display(card['rarity'] or 'Ten'))}\n\nပြောင်းလိုသော Rarity ကို ရွေးပါ။",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+@restricted_command
 async def set_card_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_force_join(update, context):
         return
@@ -3878,7 +4013,9 @@ async def kachi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_info = await context.bot.get_me()
     text = f"Name : {display_name}\nKachi Balance : {kachi_amount}\nUser ID : <code>{target_id}</code>"
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Send Kachi", url=f"https://t.me/{bot_info.username}?start=kachi_{target_id}", style="success")]
+        [InlineKeyboardButton("Send Kachi", url=f"https://t.me/{bot_info.username}?start=kachi_{target_id}", style="success")],
+        [InlineKeyboardButton("🎰 Slot", callback_data=f"kachi_slot_{target_id}", style="primary"),
+         InlineKeyboardButton("🎲 Dice", callback_data=f"kachi_dice_{target_id}", style="primary")]
     ])
     
     await _safe_reply_text(update.effective_message, text, parse_mode="HTML", reply_markup=keyboard)
@@ -5471,6 +5608,67 @@ async def kbet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if query and query.data and query.data.startswith("editraritycancel_"):
+        await query.answer("Cancelled")
+        try: await query.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        return
+    if query and query.data and query.data.startswith("editrarity_"):
+        if query.from_user.id != ADMIN_ID:
+            return await query.answer("ဒီလုပ်ဆောင်ချက်ကို Bot Admin ပဲ အသုံးပြုနိုင်ပါတယ်။", show_alert=True)
+        payload = query.data[len("editrarity_"):]
+        card_id, rarity = payload.rsplit("_", 1)
+        allowed = {"Beyond", "Birthday Special", "Raiden", "Kryora", "Yugen", "Shinsei", "Kiwami", "Kami", "Hoshi", "Ten"}
+        if rarity not in allowed:
+            return await query.answer("Rarity မမှန်ပါ။", show_alert=True)
+        async with db_pool.acquire() as conn:
+            card = await conn.fetchrow("SELECT name,type FROM cards WHERE card_id=$1 FOR UPDATE", card_id)
+            if not card:
+                return await query.answer("Card မတွေ့ပါ။", show_alert=True)
+            if (str(card['type']).lower() == "video" and rarity != "Kryora") or (str(card['type']).lower() != "video" and rarity == "Kryora"):
+                return await query.answer("Kryora က Video Card အတွက်ပဲ သတ်မှတ်ထားပါတယ်။", show_alert=True)
+            await conn.execute("UPDATE cards SET rarity=$1 WHERE card_id=$2", rarity, card_id)
+        await query.answer("Rarity ပြောင်းပြီးပါပြီ။")
+        try:
+            await query.edit_message_text(
+                f"✅ Card Rarity Updated\n\nCard: {html.escape(card['name'] or 'Unknown')}\nID: <code>{html.escape(card_id)}</code>\nNew Rarity: {html.escape(get_rarity_display(rarity))}\n\nအခြား Card အချက်အလက်တွေ မပြောင်းထားပါ။",
+                parse_mode="HTML", reply_markup=None)
+        except Exception: pass
+        return
+    if query and query.data and query.data.startswith("kachi_slot_"):
+        owner_id = int(query.data.rsplit("_", 1)[1])
+        if query.from_user.id != owner_id:
+            return await query.answer("ဒီခလုတ်ကို ပိုင်ရှင်ပဲ အသုံးပြုနိုင်ပါတယ်။", show_alert=True)
+        if owner_id in active_kslot_sessions:
+            return await query.answer("အရင် Slot ပွဲကို အရင်ဆုံးပြီးအောင်လုပ်ပါ။", show_alert=True)
+        now=time.time(); cooldown=15 if kslot_is_cancelled.get(owner_id,False) else 35
+        if now-kslot_cooldowns.get(owner_id,0)<cooldown:
+            return await query.answer(f"{int(cooldown-(now-kslot_cooldowns.get(owner_id,0)))} စက္ကန့် စောင့်ပါ။", show_alert=True)
+        amounts=[300,500,800,1500,2500,4500,7000]; rows=[]; row=[]
+        for amount in amounts:
+            row.append(InlineKeyboardButton(f"{amount} Kachi 🩸",callback_data=f"kslot_bet_{owner_id}_{amount}",style="primary"))
+            if len(row)==2: rows.append(row); row=[]
+        if row: rows.append(row)
+        rows.append([InlineKeyboardButton("🔥 All In 🩸",callback_data=f"kslot_bet_{owner_id}_allin",style="success")])
+        sent=await context.bot.send_message(query.message.chat_id,
+            f"🎰 Kachi Slot Machine Game\n\n👤 Player: {get_mention(owner_id,query.from_user.first_name)}\n👇 လောင်းကြေးပမာဏကို ရွေးပါ။",
+            parse_mode="HTML",reply_markup=InlineKeyboardMarkup(rows),reply_to_message_id=query.message.message_id,allow_sending_without_reply=True)
+        active_kslot_sessions[owner_id]={"chat_id":query.message.chat_id,"message_id":sent.message_id,"bet_amount":None}
+        return await query.answer("Slot Game Started")
+    if query and query.data and query.data.startswith("kachi_dice_"):
+        owner_id=int(query.data.rsplit("_",1)[1])
+        if query.from_user.id != owner_id:
+            return await query.answer("ဒီခလုတ်ကို ပိုင်ရှင်ပဲ အသုံးပြုနိုင်ပါတယ်။",show_alert=True)
+        key=(query.message.chat_id,owner_id)
+        if key in active_kdic_games:
+            return await query.answer("အရင် Dice ပွဲကို အရင်ဆုံးပြီးအောင်လုပ်ပါ။",show_alert=True)
+        now=time.time(); last=kdic_cooldowns.get(owner_id,0)
+        if now-last<20:
+            return await query.answer(f"{max(1,int(20-(now-last)))} စက္ကန့် စောင့်ပါ။",show_alert=True)
+        keyboard=InlineKeyboardMarkup([[InlineKeyboardButton("Small (1–3)",callback_data=f"kdic_side_{owner_id}_small",style="primary"),InlineKeyboardButton("Big (4–6)",callback_data=f"kdic_side_{owner_id}_big",style="primary")]])
+        sent=await context.bot.send_message(query.message.chat_id,"🎲 Kachi Dice Game\n\nSmall — 1 / 2 / 3\nBig — 4 / 5 / 6\n\nဘယ်ဘက်ကို ရွေးမလဲ?",reply_markup=keyboard,reply_to_message_id=query.message.message_id,allow_sending_without_reply=True)
+        active_kdic_games[key]={"owner_id":owner_id,"chat_id":query.message.chat_id,"message_id":sent.message_id,"stage":"side","side":None,"bet":0}
+        return await query.answer("Dice Game Started")
     if query and query.data and query.data.startswith("kfav_"):
         parts = query.data.split("_")
         action = parts[1] if len(parts) > 1 else ""
@@ -6601,6 +6799,7 @@ async def post_init(app: Application):
     # Initialize the database only. Card ownership limits are enforced during
     # purchases/gifts; existing over-limit amounts are changed only by /reset3x.
     await init_db()
+    app.create_task(daily_top_settlement_worker(app))
 
 
 async def application_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -6645,12 +6844,13 @@ def main():
     app.add_handler(CommandHandler("kbox", kbox_cmd))
     app.add_handler(CommandHandler("kdaily", kdaily_cmd))
     app.add_handler(CommandHandler("set", set_card_cmd))
+    app.add_handler(CommandHandler("edit", edit_card_rarity_cmd))
     app.add_handler(CommandHandler("kfav", kfav_cmd))
     app.add_handler(CommandHandler("kgift", kgift_cmd))
     app.add_handler(CommandHandler("rngift", rngift_cmd))
     app.add_handler(CommandHandler("card", card_detail_cmd))
     app.add_handler(CommandHandler("ktop", ktop_cmd))
-    app.add_handler(CommandHandler("tdc", tdc_cmd))
+    app.add_handler(CommandHandler("todaytop", todaytop_cmd))
     app.add_handler(CommandHandler("kgtop", kgtop_cmd))
     app.add_handler(CommandHandler("ksearch", ksearch_cmd))
 
