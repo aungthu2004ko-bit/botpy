@@ -708,7 +708,14 @@ async def spam_command_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not msg or not user or user.is_bot or user.id == ADMIN_ID:
         return
-    command = (msg.text or "").split()[0].split("@", 1)[0].lower()
+    command_token = (msg.text or "").split()[0]
+    command_parts = command_token.split("@", 1)
+    command = command_parts[0].lower()
+    addressed_username = command_parts[1].lower() if len(command_parts) == 2 else None
+    own_username = (getattr(context.bot, "username", None) or "").lower()
+    # Commands addressed to another bot must not trigger this bot's spam warning.
+    if addressed_username and own_username and addressed_username != own_username:
+        return
     if command == "/kprofile":
         return
     restriction = await get_user_restriction_status(user.id)
@@ -1622,6 +1629,10 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user.id, drop['card_id']
                 )
                 await check_and_auto_lock_card(conn, drop['card_id'])
+                owned_amount = await conn.fetchval(
+                    "SELECT amount FROM user_cards WHERE user_id = $1 AND card_id = $2",
+                    user.id, drop['card_id']
+                ) or 1
                 if drop_from_db:
                     claimed = await conn.fetchrow(
                         """UPDATE active_card_drops
@@ -1667,7 +1678,7 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = (f"🐣 Congratulations , {get_mention(user.id, user.first_name)} You got A new Character\n\n"
                f"❀Cᴀʀᴅ - {_plain_text(html.escape(card['name']))}\n         ✿ {card['card_id']}\n"
                f"❀RARITY - {rarity}\n      ✿ {collection}")
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton('Harem❄', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f'Harem❄ ({owned_amount}x)', switch_inline_query_current_chat=f'harem.{user.id}', style="success")]])
     try:
         if card['type'] == 'photo':
             await context.bot.send_photo(
@@ -3795,7 +3806,6 @@ async def render_kc_view(update_or_query, context: ContextTypes.DEFAULT_TYPE, pa
     for col_name, cards_in_col in collections_dict.items():
         clean_col_name = re.sub(r"^🎞\s*", "", col_name).strip()
         clean_col_name = re.sub(r"\s+\[", "[", clean_col_name)
-        content_blocks.append("")
         content_blocks.append(f"🍀{html.escape(clean_col_name)}\n------------------------------------------")
         for c in cards_in_col:
             r_emoji = get_rarity_emoji(c.get('rarity'))
@@ -4501,8 +4511,10 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     owners_text_list = []
     if top_owners:
+        top_medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         for idx, row in enumerate(top_owners, 1):
-            owners_text_list.append(f"☛ {get_mention(row['user_id'], row['name'])} — {row['amount']}x")
+            prefix = top_medals.get(idx, "☛")
+            owners_text_list.append(f"{prefix} {get_mention(row['user_id'], row['name'])} — {row['amount']}x")
         owners_str = "\n".join(owners_text_list)
     else:
         owners_str = "☛ <i>No owners yet.</i>"
@@ -4554,18 +4566,22 @@ async def card_detail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_video:
         try:
-            await context.bot.send_video(chat_id=chat.id, video=card['file_id'], caption=caption_text, parse_mode="HTML")
+            await context.bot.send_video(chat_id=chat.id, video=card['file_id'], caption=caption_text, parse_mode="HTML",
+                                         reply_to_message_id=msg_id, allow_sending_without_reply=True)
         except Exception:
             try:
-                await context.bot.send_animation(chat_id=chat.id, animation=card['file_id'], caption=caption_text, parse_mode="HTML")
+                await context.bot.send_animation(chat_id=chat.id, animation=card['file_id'], caption=caption_text, parse_mode="HTML",
+                                                 reply_to_message_id=msg_id, allow_sending_without_reply=True)
             except Exception:
                 await _safe_reply_text(update.effective_message, caption_text, parse_mode="HTML")
     else:
         try:
-            await context.bot.send_photo(chat_id=chat.id, photo=card['file_id'], caption=caption_text, parse_mode="HTML")
+            await context.bot.send_photo(chat_id=chat.id, photo=card['file_id'], caption=caption_text, parse_mode="HTML",
+                                         reply_to_message_id=msg_id, allow_sending_without_reply=True)
         except Exception:
             try:
-                await context.bot.send_document(chat_id=chat.id, document=card['file_id'], caption=caption_text, parse_mode="HTML")
+                await context.bot.send_document(chat_id=chat.id, document=card['file_id'], caption=caption_text, parse_mode="HTML",
+                                                reply_to_message_id=msg_id, allow_sending_without_reply=True)
             except Exception:
                 await _safe_reply_text(update.effective_message, caption_text, parse_mode="HTML")
 
