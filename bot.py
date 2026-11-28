@@ -390,6 +390,9 @@ async def _init_db_once():
                 user_id BIGINT NOT NULL,
                 PRIMARY KEY (message_key, user_id)
             );
+            ALTER TABLE send_message_likes ADD COLUMN IF NOT EXISTS total_haha BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE send_message_likes ADD COLUMN IF NOT EXISTS total_chee BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE send_message_like_users ADD COLUMN IF NOT EXISTS reaction TEXT NOT NULL DEFAULT 'like';
             CREATE TABLE IF NOT EXISTS active_card_drops (
                 chat_id BIGINT NOT NULL,
                 message_id BIGINT NOT NULL,
@@ -1590,6 +1593,22 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             (r for r in rows if normalize_character_answer(r['card_name']) == requested),
                             rows[0] if rows else None
                         )
+                        # If another user just won this same spawn, tell the late catcher
+                        # who got it instead of silently returning or saying no spawn exists.
+                        if not drop:
+                            claimed_rows = await conn.fetch(
+                                """SELECT * FROM active_card_drops
+                                   WHERE chat_id=$1 AND winner_id IS NOT NULL AND expires_at>$2
+                                   ORDER BY message_id DESC""",
+                                chat.id, now
+                            )
+                            drop = next(
+                                (r for r in claimed_rows
+                                 if normalize_character_answer(r['card_name']) == requested
+                                 or (len(requested.split()) == 1 and
+                                     normalize_character_answer(r['card_name']).split()[:1] == [requested])),
+                                None
+                            )
 
                 # Remember whether this is a database-backed drop before local fallback.
                 drop_from_db = drop is not None
@@ -1623,6 +1642,27 @@ async def _mm_cmd_impl(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         c = local['card']
                         drop = {
                             'chat_id': chat.id, 'message_id': replied_id,
+                            'card_id': str(c.get('card_id') or ''), 'card_name': c.get('name') or '',
+                            'card_type': c.get('type'), 'file_id': c.get('file_id'),
+                            'rarity': c.get('rarity'), 'collection': c.get('collection'),
+                            'expires_at': local.get('expires_at', 0), 'winner_id': local.get('winner_id'),
+                            'winner_name': local.get('winner_name'), 'ended': local.get('ended', False)
+                        }
+                # Also check local completed spawns for the same short-lived drop window.
+                if not drop and replied_id is None:
+                    local_claims = [
+                        (mid, d) for mid, d in active_card_drops.items()
+                        if d.get('chat_id') == chat.id and d.get('winner_id') is not None
+                        and d.get('expires_at', 0) > now
+                        and (normalize_character_answer(d.get('card', {}).get('name', '')) == requested
+                             or (len(requested.split()) == 1 and
+                                 normalize_character_answer(d.get('card', {}).get('name', '')).split()[:1] == [requested]))
+                    ]
+                    if local_claims:
+                        mid, local = max(local_claims, key=lambda item: item[0])
+                        c = local['card']
+                        drop = {
+                            'chat_id': chat.id, 'message_id': mid,
                             'card_id': str(c.get('card_id') or ''), 'card_name': c.get('name') or '',
                             'card_type': c.get('type'), 'file_id': c.get('file_id'),
                             'rarity': c.get('rarity'), 'collection': c.get('collection'),
@@ -2439,18 +2479,45 @@ async def create_redeem_code_cmd(update: Update, context: ContextTypes.DEFAULT_T
             raise ValueError
     except (TypeError, ValueError):
         return await _safe_reply_text(msg, "❌ Amount, Code သို့မဟုတ် User Limit မှားနေပါတယ်။")
+    if db_pool is None:
+        return await _safe_reply_text(msg, "❌ Database မချိတ်ဆက်ရသေးပါ။ Railway Logs ကိုစစ်ပါ။")
     try:
         async with db_pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO redeem_codes(code,amount,max_uses,created_by,created_at) VALUES($1,$2,$3,$4,$5)",
-                code, amount, limit, user.id, int(time.time())
-            )
+            async with conn.transaction():
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS redeem_codes (
+                        code TEXT PRIMARY KEY,
+                        amount BIGINT NOT NULL CHECK (amount > 0),
+                        max_uses INT NOT NULL CHECK (max_uses > 0),
+                        used_count INT NOT NULL DEFAULT 0,
+                        created_by BIGINT NOT NULL,
+                        created_at BIGINT NOT NULL DEFAULT 0
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS redeem_code_uses (
+                        code TEXT NOT NULL REFERENCES redeem_codes(code) ON DELETE CASCADE,
+                        user_id BIGINT NOT NULL,
+                        redeemed_at BIGINT NOT NULL DEFAULT 0,
+                        PRIMARY KEY (code, user_id)
+                    )
+                """)
+                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS amount BIGINT NOT NULL DEFAULT 1")
+                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS max_uses INT NOT NULL DEFAULT 1")
+                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS used_count INT NOT NULL DEFAULT 0")
+                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0")
+                await conn.execute("ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0")
+                inserted = await conn.fetchval(
+                    "INSERT INTO redeem_codes(code,amount,max_uses,created_by,created_at) "
+                    "VALUES($1,$2,$3,$4,$5) ON CONFLICT(code) DO NOTHING RETURNING code",
+                    code, amount, limit, user.id, int(time.time())
+                )
+                if not inserted:
+                    return await _safe_reply_text(msg, "❌ ဒီ Code ကို အသုံးပြုပြီးသားပါ။ နောက် Code အသစ်သုံးပါ။")
         return await _safe_reply_text(msg, f"✅ Redeem Code ဖန်တီးပြီးပါပြီ။\nCode: <code>{html.escape(code)}</code>\nAmount: {amount:,} Kachi\nLimit: {limit} users", parse_mode="HTML")
-    except asyncpg.UniqueViolationError:
-        return await _safe_reply_text(msg, "❌ ဒီ Code ကို အသုံးပြုပြီးသားပါ။ နောက် Code အသစ်သုံးပါ။")
     except Exception as e:
         print(f"/code failed: {type(e).__name__}: {e}")
-        return await _safe_reply_text(msg, "❌ Code ဖန်တီးမရပါ။ ခဏနေမှ ထပ်စမ်းပါ။")
+        return await _safe_reply_text(msg, f"❌ Code ဖန်တီးမရပါ။ Database Error: {type(e).__name__}")
 
 
 @restricted_command
@@ -4994,15 +5061,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending=pending_group_sends.pop(user.id); targets=pending["targets"]
         successes=0; failures=0
         async with db_pool.acquire() as conn:
-            total=await conn.fetchval("SELECT COUNT(*) FROM send_message_like_users")
+            totals = await conn.fetchrow(
+                "SELECT COALESCE(SUM(total_likes),0) AS likes, "
+                "COALESCE(SUM(total_haha),0) AS haha, COALESCE(SUM(total_chee),0) AS chee "
+                "FROM send_message_likes"
+            )
         for target_ref in targets:
             try:
                 chat=await context.bot.get_chat(target_ref)
                 key=f"{uuid.uuid4()}"
-                keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(f"Like ❤️ {int(total or 0)}",callback_data=f"sendlike_{key}",style="primary")]])
+                keyboard=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(f"Like❤ {int(totals['likes'] or 0)}",callback_data=f"sendreact_{key}_like",style="primary"),
+                    InlineKeyboardButton(f"HaHa😂 {int(totals['haha'] or 0)}",callback_data=f"sendreact_{key}_haha",style="primary"),
+                    InlineKeyboardButton(f"Chee💩 {int(totals['chee'] or 0)}",callback_data=f"sendreact_{key}_chee",style="primary")
+                ]])
                 sent_message=await context.bot.send_message(chat_id=chat.id,text=f"🦋 Message \n\n{msg.text}",reply_markup=keyboard)
                 async with db_pool.acquire() as conn:
-                    await conn.execute("INSERT INTO send_message_likes(message_key,total_likes,chat_id,message_id) VALUES($1,0,$2,$3)",key,chat.id,sent_message.message_id)
+                    await conn.execute(
+                        "INSERT INTO send_message_likes(message_key,total_likes,total_haha,total_chee,chat_id,message_id) "
+                        "VALUES($1,0,0,0,$2,$3)", key, chat.id, sent_message.message_id
+                    )
                 successes+=1
             except Exception as e:
                 failures+=1; print(f"/send delivery failed: {type(e).__name__}: {e}")
@@ -5812,24 +5890,67 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_to_message_id=query.message.message_id if query.message else None,
                 allow_sending_without_reply=True
             )
-    if query and query.data and query.data.startswith("sendlike_"):
-        key=query.data[len("sendlike_"):]; uid=query.from_user.id
-        async with db_pool.acquire() as conn:
-            async with conn.transaction():
-                exists=await conn.fetchval("SELECT 1 FROM send_message_like_users WHERE message_key=$1 AND user_id=$2",key,uid)
-                if exists: return await query.answer("You already liked this message.")
-                await conn.execute("INSERT INTO send_message_like_users(message_key,user_id) VALUES($1,$2)",key,uid)
-                await conn.execute("UPDATE send_message_likes SET total_likes=total_likes+1 WHERE message_key=$1",key)
-                total=await conn.fetchval("SELECT COUNT(*) FROM send_message_like_users")
-                sent_messages=await conn.fetch("SELECT message_key,chat_id,message_id FROM send_message_likes WHERE chat_id IS NOT NULL AND message_id IS NOT NULL")
-        # Show the same all-time total on every /send message, including messages in other groups.
-        for sent_row in sent_messages:
+    if query and query.data and (query.data.startswith("sendreact_") or query.data.startswith("sendlike_")):
+        if query.data.startswith("sendlike_"):
+            parts = ["sendreact", query.data[len("sendlike_"):], "like"]
+        else:
+            parts = query.data.split("_")
+        if len(parts) != 3 or parts[2] not in ("like", "haha", "chee"):
+            return await query.answer("Reaction မမှန်ပါ။", show_alert=True)
+        key, reaction = parts[1], parts[2]
+        uid = query.from_user.id
+        columns = {"like": "total_likes", "haha": "total_haha", "chee": "total_chee"}
+        try:
+            async with db_pool.acquire() as conn:
+                async with conn.transaction():
+                    old_reaction = await conn.fetchval(
+                        "SELECT reaction FROM send_message_like_users WHERE message_key=$1 AND user_id=$2 FOR UPDATE",
+                        key, uid
+                    )
+                    if old_reaction == reaction:
+                        return await query.answer("ဒီ Reaction ကို ပေးပြီးပါပြီ။")
+                    if old_reaction:
+                        await conn.execute(
+                            "UPDATE send_message_like_users SET reaction=$1 WHERE message_key=$2 AND user_id=$3",
+                            reaction, key, uid
+                        )
+                        await conn.execute(
+                            f"UPDATE send_message_likes SET {columns[old_reaction]}=GREATEST(0,{columns[old_reaction]}-1), "
+                            f"{columns[reaction]}={columns[reaction]}+1 WHERE message_key=$1", key
+                        )
+                    else:
+                        await conn.execute(
+                            "INSERT INTO send_message_like_users(message_key,user_id,reaction) VALUES($1,$2,$3)",
+                            key, uid, reaction
+                        )
+                        await conn.execute(
+                            f"UPDATE send_message_likes SET {columns[reaction]}={columns[reaction]}+1 WHERE message_key=$1",
+                            key
+                        )
+                    message_exists = await conn.fetchval(
+                        "SELECT 1 FROM send_message_likes WHERE message_key=$1", key
+                    )
+                    totals = await conn.fetchrow(
+                        "SELECT COALESCE(SUM(total_likes),0) AS total_likes, "
+                        "COALESCE(SUM(total_haha),0) AS total_haha, "
+                        "COALESCE(SUM(total_chee),0) AS total_chee FROM send_message_likes"
+                    )
+            if not message_exists:
+                return await query.answer("ဒီ Send message ကို ရှာမတွေ့ပါ။", show_alert=True)
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"Like❤ {int(totals['total_likes'] or 0)}",callback_data=f"sendreact_{key}_like",style="primary"),
+                InlineKeyboardButton(f"HaHa😂 {int(totals['total_haha'] or 0)}",callback_data=f"sendreact_{key}_haha",style="primary"),
+                InlineKeyboardButton(f"Chee💩 {int(totals['total_chee'] or 0)}",callback_data=f"sendreact_{key}_chee",style="primary")
+            ]])
+            await query.answer("Reaction တင်ပြီးပါပြီ။")
             try:
-                markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"Like ❤️ {int(total or 0)}",callback_data=f"sendlike_{sent_row['message_key']}",style="primary")]])
-                await context.bot.edit_message_reply_markup(chat_id=sent_row['chat_id'],message_id=sent_row['message_id'],reply_markup=markup)
-            except Exception:
-                pass
-        return await query.answer("Liked ❤️")
+                await query.edit_message_reply_markup(reply_markup=markup)
+            except Exception as edit_error:
+                print(f"Send reaction keyboard update failed: {type(edit_error).__name__}: {edit_error}")
+            return
+        except Exception as e:
+            print(f"Send reaction failed: {type(e).__name__}: {e}")
+            return await query.answer("Reaction တင်မရပါ။ ခဏနေမှ ထပ်စမ်းပါ။", show_alert=True)
     if query and query.data and query.data.startswith("tdcpage_"):
         parts=query.data[len("tdcpage_"):].split("_"); date=datetime.date.fromisoformat(parts[0]); page=int(parts[1])
         await query.answer()
